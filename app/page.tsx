@@ -87,6 +87,14 @@ export default function Home() {
         style={{ background: "linear-gradient(to bottom, transparent, #C9A15E33 8%, #C9A15E33 92%, transparent)" }}
       />
 
+      <Link
+        href="/admin"
+        className="fixed top-5 right-5 z-30 inline-flex items-center gap-1.5 text-xs text-muted hover:text-gold transition-colors bg-surface border border-border rounded-full px-3 py-2"
+      >
+        <Settings size={12} />
+        Login
+      </Link>
+
       <header className="relative z-10 px-6 md:px-12 pt-10 pb-8 text-center">
         <div className="inline-flex items-center gap-2 text-xs tracking-[0.3em] uppercase mb-4 text-gold">
           <Flame size={13} />
@@ -159,16 +167,6 @@ export default function Home() {
           ))}
         </div>
       </main>
-
-      <footer className="relative z-10 text-center pb-10">
-        <Link
-          href="/admin"
-          className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-gold transition-colors"
-        >
-          <Settings size={12} />
-          Für Trainerinnen: Admin-Bereich
-        </Link>
-      </footer>
 
       {selected && (
         <div className="fixed inset-0 z-20 flex items-center justify-center p-4" style={{ background: "#0A0910CC" }}>
