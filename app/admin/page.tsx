@@ -17,8 +17,8 @@ const EMPTY_COURSE = {
 };
 const EMPTY_CUSTOMER = { name: "", email: "", phone: "", level: "", notes: "" };
 const EMPTY_PRODUCT = {
-  name: "", category: "Poledance", price_cents: 0, credits: "", valid_days: "",
-  requires_payment_confirmation: false, allowed_categories: [] as string[], notes: "",
+  name: "", category: "Poledance", price_cents: 0, reduced_price_cents: "", credits: "", valid_days: "",
+  allowed_categories: [] as string[], notes: "",
 };
 
 const inputClass = "px-4 py-2.5 rounded-xl text-sm bg-bg border border-border text-ivory";
@@ -47,7 +47,7 @@ export default function AdminPage() {
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [editCustomer, setEditCustomer] = useState<any>(null);
   const [assigningFor, setAssigningFor] = useState<string | null>(null);
-  const [assignForm, setAssignForm] = useState<any>({ productId: "", valid_from: "", valid_until: "", credits_total: "" });
+  const [assignForm, setAssignForm] = useState<any>({ productId: "", valid_from: "", valid_until: "", credits_total: "", isReduced: false });
 
   const [newProduct, setNewProduct] = useState<any>(EMPTY_PRODUCT);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -101,6 +101,15 @@ export default function AdminPage() {
       body: JSON.stringify({ password, sessionId, cancelled }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadSessions();
+  }
+  async function saveBookingNote(bookingId: string, notes: string) {
+    setActionError(null);
+    const res = await fetch("/api/admin/bookings", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, bookingId, notes }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Speichern des Kommentars."); return; }
     await loadSessions();
   }
 
@@ -180,7 +189,7 @@ export default function AdminPage() {
   }
   function startAssign(customerId: string) {
     setAssigningFor(customerId);
-    setAssignForm({ productId: products[0]?.id ?? "", valid_from: new Date().toISOString().slice(0, 10), valid_until: "", credits_total: "" });
+    setAssignForm({ productId: products[0]?.id ?? "", valid_from: new Date().toISOString().slice(0, 10), valid_until: "", credits_total: "", isReduced: false });
   }
   async function submitAssign(e: React.FormEvent) {
     e.preventDefault();
@@ -192,6 +201,7 @@ export default function AdminPage() {
         valid_from: assignForm.valid_from || undefined,
         valid_until: assignForm.valid_until || undefined,
         credits_total: assignForm.credits_total ? Number(assignForm.credits_total) : undefined,
+        isReduced: assignForm.isReduced,
       }),
     });
     const data = await res.json();
@@ -228,6 +238,7 @@ export default function AdminPage() {
       body: JSON.stringify({
         password, ...newProduct,
         price_cents: Math.round(Number(newProduct.price_cents) * 100),
+        reduced_price_cents: newProduct.reduced_price_cents ? Math.round(Number(newProduct.reduced_price_cents) * 100) : null,
         credits: newProduct.credits ? Number(newProduct.credits) : null,
         valid_days: newProduct.valid_days ? Number(newProduct.valid_days) : null,
       }),
@@ -236,6 +247,35 @@ export default function AdminPage() {
     setSaving(false);
     if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
     setNewProduct(EMPTY_PRODUCT);
+    await loadProducts();
+  }
+  function startEditProduct(p: any) {
+    setEditingProductId(p.id);
+    setEditProduct({
+      name: p.name, category: p.category,
+      price_cents: (p.price_cents / 100).toString(),
+      reduced_price_cents: p.reduced_price_cents ? (p.reduced_price_cents / 100).toString() : "",
+      credits: p.credits ?? "", valid_days: p.valid_days ?? "",
+      allowed_categories: p.allowed_categories ?? [], notes: p.notes ?? "",
+    });
+  }
+  async function saveEditProduct() {
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/products", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        password, id: editingProductId, ...editProduct,
+        price_cents: Math.round(Number(editProduct.price_cents) * 100),
+        reduced_price_cents: editProduct.reduced_price_cents ? Math.round(Number(editProduct.reduced_price_cents) * 100) : null,
+        credits: editProduct.credits ? Number(editProduct.credits) : null,
+        valid_days: editProduct.valid_days ? Number(editProduct.valid_days) : null,
+        allowed_categories: editProduct.allowed_categories?.length ? editProduct.allowed_categories : null,
+      }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setEditingProductId(null);
     await loadProducts();
   }
   async function deactivateProduct(id: string, name: string) {
@@ -307,15 +347,21 @@ export default function AdminPage() {
               {s.participants.length === 0 ? (
                 <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
               ) : (
-                <ul className="mt-2 text-sm text-ivory space-y-1">
+                <ul className="mt-2 text-sm text-ivory space-y-2">
                   {s.participants.map((p: any, i: number) => (
-                    <li key={i} className="flex items-center gap-1.5">
+                    <li key={i} className="flex items-center gap-1.5 flex-wrap">
                       {p.name} <span className="text-muted">— {p.email}</span>
                       {!p.hasActiveProduct && (
                         <span className="flex items-center gap-1 text-xs text-gold ml-1" title="Kein aktives, passendes Produkt hinterlegt">
                           <AlertTriangle size={12} /> kein aktives Produkt
                         </span>
                       )}
+                      <input
+                        placeholder="Kommentar (z.B. Zahlung fehlt)"
+                        defaultValue={p.notes}
+                        onBlur={(e) => { if (e.target.value !== p.notes) saveBookingNote(p.bookingId, e.target.value); }}
+                        className="ml-auto text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory w-56"
+                      />
                     </li>
                   ))}
                 </ul>
@@ -447,7 +493,7 @@ export default function AdminPage() {
                       <ul className="mt-3 space-y-1.5">
                         {c.customer_products.filter((cp: any) => cp.active).map((cp: any) => (
                           <li key={cp.id} className="text-xs text-ivory flex items-center gap-2 flex-wrap">
-                            <span className="px-2 py-0.5 rounded-full bg-bg border border-border">{cp.product?.name}</span>
+                            <span className="px-2 py-0.5 rounded-full bg-bg border border-border">{cp.product?.name}{cp.is_reduced ? " (ermäßigt)" : ""}</span>
                             <span className="text-muted">
                               {cp.valid_from} – {cp.valid_until ?? "unbegrenzt"}
                               {cp.credits_total ? ` · ${cp.credits_remaining ?? cp.credits_total}/${cp.credits_total} Guthaben` : ""}
@@ -470,6 +516,10 @@ export default function AdminPage() {
                           <input type="number" placeholder="Guthaben (optional, sonst vom Produkt)" value={assignForm.credits_total} onChange={(e) => setAssignForm({ ...assignForm, credits_total: e.target.value })} className={inputClass} />
                         </div>
                         <p className="text-xs text-muted">Auch rückwirkend oder mit abgelaufenem Datum möglich.</p>
+                        <label className="flex items-center gap-2 text-sm text-ivory">
+                          <input type="checkbox" checked={assignForm.isReduced} onChange={(e) => setAssignForm({ ...assignForm, isReduced: e.target.checked })} />
+                          Ermäßigt (Studierende/Ausbildung) — Nachweis liegt vor
+                        </label>
                         <div className="flex gap-2">
                           <button type="submit" disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">{saving ? "Speichere…" : "Zuweisen"}</button>
                           <button type="button" onClick={() => setAssigningFor(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
@@ -492,12 +542,9 @@ export default function AdminPage() {
               <input required placeholder="Name (z.B. 10er Karte)" value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} className={inputClass} />
               <input required placeholder="Kategorie (z.B. Poledance, Kursabo)" value={newProduct.category} onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })} className={inputClass} />
               <input required type="number" step="0.01" placeholder="Preis in €" value={newProduct.price_cents} onChange={(e) => setNewProduct({ ...newProduct, price_cents: e.target.value })} className={inputClass} />
+              <input type="number" step="0.01" placeholder="Ermäßigter Preis in € (optional)" value={newProduct.reduced_price_cents} onChange={(e) => setNewProduct({ ...newProduct, reduced_price_cents: e.target.value })} className={inputClass} />
               <input type="number" placeholder="Guthaben (leer = unbegrenzt)" value={newProduct.credits} onChange={(e) => setNewProduct({ ...newProduct, credits: e.target.value })} className={inputClass} />
               <input type="number" placeholder="Gültigkeit in Tagen (leer = unbegrenzt)" value={newProduct.valid_days} onChange={(e) => setNewProduct({ ...newProduct, valid_days: e.target.value })} className={inputClass} />
-              <label className="flex items-center gap-2 text-sm text-ivory px-1">
-                <input type="checkbox" checked={newProduct.requires_payment_confirmation} onChange={(e) => setNewProduct({ ...newProduct, requires_payment_confirmation: e.target.checked })} />
-                Zahlung muss pro Termin bestätigt werden (z.B. Drop-in, USC-Zuzahlung)
-              </label>
             </div>
             <div>
               <p className="text-xs text-muted mb-2">Buchbar für Kurs-Kategorien (keine Auswahl = alle):</p>
@@ -518,18 +565,53 @@ export default function AdminPage() {
           <div className="space-y-3">
             <h3 className="font-display text-lg text-ivory">Bestehende Produkte</h3>
             {products.map((p) => (
-              <div key={p.id} className="rounded-2xl p-5 border border-border bg-surface flex items-center justify-between flex-wrap gap-2">
-                <div>
-                  <h4 className="font-display text-lg text-ivory">{p.name} {!p.active && <span className="text-xs text-wine">(inaktiv)</span>}</h4>
-                  <p className="text-xs text-muted mt-1">
-                    {p.category} · {euro(p.price_cents)}{p.credits ? ` · ${p.credits} Einheiten` : " · unbegrenzt"}{p.valid_days ? ` · ${p.valid_days} Tage gültig` : ""}
-                    {p.requires_payment_confirmation ? " · Zahlung muss bestätigt werden" : ""}
-                  </p>
-                  {p.allowed_categories?.length > 0 && (
-                    <p className="text-xs text-muted mt-1">Nur für: {p.allowed_categories.join(", ")}</p>
-                  )}
-                </div>
-                {p.active && <button onClick={() => deactivateProduct(p.id, p.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Deaktivieren</button>}
+              <div key={p.id} className="rounded-2xl p-5 border border-border bg-surface">
+                {editingProductId === p.id ? (
+                  <div className="space-y-3">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <input value={editProduct.name} onChange={(e) => setEditProduct({ ...editProduct, name: e.target.value })} className={inputClass} />
+                      <input value={editProduct.category} onChange={(e) => setEditProduct({ ...editProduct, category: e.target.value })} className={inputClass} />
+                      <input type="number" step="0.01" placeholder="Preis in €" value={editProduct.price_cents} onChange={(e) => setEditProduct({ ...editProduct, price_cents: e.target.value })} className={inputClass} />
+                      <input type="number" step="0.01" placeholder="Ermäßigter Preis in €" value={editProduct.reduced_price_cents} onChange={(e) => setEditProduct({ ...editProduct, reduced_price_cents: e.target.value })} className={inputClass} />
+                      <input type="number" placeholder="Guthaben" value={editProduct.credits} onChange={(e) => setEditProduct({ ...editProduct, credits: e.target.value })} className={inputClass} />
+                      <input type="number" placeholder="Gültigkeit in Tagen" value={editProduct.valid_days} onChange={(e) => setEditProduct({ ...editProduct, valid_days: e.target.value })} className={inputClass} />
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted mb-2">Buchbar für Kurs-Kategorien (keine Auswahl = alle):</p>
+                      <div className="flex flex-wrap gap-2">
+                        {COURSE_CATEGORIES.map((cat) => (
+                          <button type="button" key={cat}
+                            onClick={() => setEditProduct({ ...editProduct, allowed_categories: toggleCategory(editProduct.allowed_categories, cat) })}
+                            className={`text-xs px-3 py-1.5 rounded-full border ${editProduct.allowed_categories.includes(cat) ? "bg-gold text-bg border-gold" : "border-border text-muted"}`}>
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <textarea value={editProduct.notes} onChange={(e) => setEditProduct({ ...editProduct, notes: e.target.value })} placeholder="Notizen" className={`w-full ${inputClass}`} />
+                    <div className="flex gap-2">
+                      <button onClick={saveEditProduct} disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">{saving ? "Speichere…" : "Speichern"}</button>
+                      <button onClick={() => setEditingProductId(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div>
+                      <h4 className="font-display text-lg text-ivory">{p.name} {!p.active && <span className="text-xs text-wine">(inaktiv)</span>}</h4>
+                      <p className="text-xs text-muted mt-1">
+                        {p.category} · {euro(p.price_cents)}{p.reduced_price_cents ? ` (ermäßigt ${euro(p.reduced_price_cents)})` : ""}
+                        {p.credits ? ` · ${p.credits} Einheiten` : " · unbegrenzt"}{p.valid_days ? ` · ${p.valid_days} Tage gültig` : ""}
+                      </p>
+                      {p.allowed_categories?.length > 0 && (
+                        <p className="text-xs text-muted mt-1">Nur für: {p.allowed_categories.join(", ")}</p>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => startEditProduct(p)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">Bearbeiten</button>
+                      {p.active && <button onClick={() => deactivateProduct(p.id, p.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Deaktivieren</button>}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

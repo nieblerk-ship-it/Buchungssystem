@@ -15,14 +15,14 @@ export async function GET(req: Request) {
 }
 
 // POST /api/admin/products
-// body: { password, name, category, price_cents, credits, valid_days,
-//         requires_payment_confirmation, allowed_categories, notes }
+// body: { password, name, category, price_cents, reduced_price_cents, credits,
+//         valid_days, allowed_categories, notes }
 export async function POST(req: Request) {
   const body = await req.json();
   if (!checkAdminPassword(body.password)) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
-  const { name, category, price_cents, credits, valid_days, requires_payment_confirmation, allowed_categories, notes } = body;
+  const { name, category, price_cents, reduced_price_cents, credits, valid_days, allowed_categories, notes } = body;
   if (!name?.trim() || !category?.trim() || price_cents === undefined) {
     return NextResponse.json({ error: "Bitte Name, Kategorie und Preis angeben." }, { status: 400 });
   }
@@ -33,9 +33,9 @@ export async function POST(req: Request) {
       name: name.trim(),
       category: category.trim(),
       price_cents,
+      reduced_price_cents: reduced_price_cents || null,
       credits: credits || null,
       valid_days: valid_days || null,
-      requires_payment_confirmation: !!requires_payment_confirmation,
       allowed_categories: allowed_categories?.length ? allowed_categories : null,
       notes: notes?.trim() || null,
     })

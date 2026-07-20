@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { checkAdminPassword } from "@/lib/adminAuth";
 
 // POST /api/admin/customer-products
-// body: { password, customerId, productId, valid_from?, valid_until?, credits_total?, notes? }
+// body: { password, customerId, productId, valid_from?, valid_until?, credits_total?, isReduced?, notes? }
 // Weist einer/einem Schüler:in ein Produkt zu. Laufzeit/Guthaben werden, falls
 // nicht angegeben, aus dem Produkt übernommen (auch rückwirkend/nach Ablauf möglich).
 export async function POST(req: Request) {
@@ -11,7 +11,7 @@ export async function POST(req: Request) {
   if (!checkAdminPassword(body.password)) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
-  const { customerId, productId, valid_from, valid_until, credits_total, notes } = body;
+  const { customerId, productId, valid_from, valid_until, credits_total, isReduced, notes } = body;
   if (!customerId || !productId) {
     return NextResponse.json({ error: "Schüler und Produkt müssen angegeben sein." }, { status: 400 });
   }
@@ -28,6 +28,7 @@ export async function POST(req: Request) {
     until = d.toISOString().slice(0, 10);
   }
   const credits = credits_total ?? product.credits ?? null;
+  const pricePaid = isReduced ? (product.reduced_price_cents ?? product.price_cents) : product.price_cents;
 
   const { data, error } = await db
     .from("customer_products")
@@ -38,6 +39,8 @@ export async function POST(req: Request) {
       valid_until: until,
       credits_total: credits,
       credits_remaining: credits,
+      is_reduced: !!isReduced,
+      price_paid_cents: pricePaid,
       notes: notes?.trim() || null,
     })
     .select("id")

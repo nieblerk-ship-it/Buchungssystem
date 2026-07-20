@@ -15,7 +15,7 @@ export async function GET(req: Request) {
     .select(
       `id, name, email, phone, level, notes, created_at,
        customer_products (
-         id, valid_from, valid_until, credits_total, credits_remaining, active, notes,
+         id, valid_from, valid_until, credits_total, credits_remaining, active, notes, is_reduced, price_paid_cents,
          product:products ( id, name, category, requires_payment_confirmation, allowed_categories )
        )`
     )

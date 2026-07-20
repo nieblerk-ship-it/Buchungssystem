@@ -19,14 +19,13 @@ export async function GET(req: Request) {
     .select(
       `id, session_date, cancelled, capacity_override,
        course:courses ( name, level, category, start_time, capacity ),
-       bookings ( id, status, customer:customers ( id, name, email ) )`
+       bookings ( id, status, notes, customer:customers ( id, name, email ) )`
     )
     .gte("session_date", new Date().toISOString().slice(0, 10))
     .order("session_date", { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Alle relevanten Produktzuweisungen einmal laden, statt pro Teilnehmer:in einzeln
   const customerIds = Array.from(
     new Set(
       (sessions ?? []).flatMap((s: any) => (s.bookings ?? []).map((b: any) => b.customer?.id).filter(Boolean))
@@ -63,8 +62,10 @@ export async function GET(req: Request) {
     participants: (s.bookings ?? [])
       .filter((b: any) => b.status === "confirmed")
       .map((b: any) => ({
+        bookingId: b.id,
         name: b.customer?.name,
         email: b.customer?.email,
+        notes: b.notes ?? "",
         hasActiveProduct: b.customer?.id
           ? hasActiveProduct(b.customer.id, s.course?.category, s.session_date)
           : false,
@@ -72,4 +73,20 @@ export async function GET(req: Request) {
   }));
 
   return NextResponse.json({ sessions: result });
+}
+
+// PATCH /api/admin/bookings
+// body: { password, bookingId, notes }
+// Freitext-Kommentar zu einer Buchung, z.B. "Zahlung fehlt noch".
+export async function PATCH(req: Request) {
+  const body = await req.json();
+  if (!checkAdminPassword(body.password)) {
+    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
+  }
+  const { bookingId, notes } = body;
+  if (!bookingId) return NextResponse.json({ error: "Buchungs-ID fehlt." }, { status: 400 });
+  const db = supabaseAdmin();
+  const { error } = await db.from("bookings").update({ notes: notes ?? null }).eq("id", bookingId);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true });
 }
