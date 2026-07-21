@@ -1,12 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, AlertTriangle } from "lucide-react";
+import { ArrowLeft, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 
 const WEEKDAYS = [
   { value: 1, label: "Montag" }, { value: 2, label: "Dienstag" }, { value: 3, label: "Mittwoch" },
   { value: 4, label: "Donnerstag" }, { value: 5, label: "Freitag" }, { value: 6, label: "Samstag" }, { value: 7, label: "Sonntag" },
+];
+const WEEKDAY_SHORT = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+const MONTH_LABEL = [
+  "Januar", "Februar", "März", "April", "Mai", "Juni",
+  "Juli", "August", "September", "Oktober", "November", "Dezember",
 ];
 
 const COURSE_CATEGORIES = ["Pole", "Exotic Pole", "Openclass", "Conditioning", "Shape & Flexibility", "Specials"];
@@ -28,14 +33,52 @@ function euro(cents: number) {
   return (cents / 100).toFixed(2) + "€";
 }
 
+// ---- Datumshilfen für die Wochenansicht (wie auf der Buchungsseite) ----
+function formatDateOnly(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(d.getDate() + n);
+  return r;
+}
+function getMonday(d: Date): Date {
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diff);
+  monday.setHours(0, 0, 0, 0);
+  return monday;
+}
+function getISOWeek(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+function isSameDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
 export default function AdminPage() {
   const [password, setPassword] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "kursplan" | "meldungen">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "meldungen">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
+
+  const today = useMemo(() => new Date(), []);
+  const currentWeekStart = useMemo(() => getMonday(today), [today]);
+  const [weekStart, setWeekStart] = useState<Date>(currentWeekStart);
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerMonth, setPickerMonth] = useState<Date>(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -398,7 +441,6 @@ export default function AdminPage() {
         {[
           { id: "anmeldungen", label: "Anmeldungen" },
           { id: "kurse", label: "Kurse verwalten" },
-          { id: "kursplan", label: "Kursplan" },
           { id: "schueler", label: "Schüler:innen" },
           { id: "produkte", label: "Produkte" },
           { id: "meldungen", label: "Meldungen" },
@@ -412,65 +454,180 @@ export default function AdminPage() {
 
       {actionError && <p className="text-sm text-wine mb-4">{actionError}</p>}
 
-      {tab === "anmeldungen" && (
-        <div className="space-y-4">
-          {sessions.map((s) => {
-            const overbooked = s.participants.length > s.capacity;
-            return (
-            <div key={s.id} className={`rounded-2xl p-5 border bg-surface ${overbooked ? "border-2 border-red-500" : "border-border"}`}>
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <h3 className="font-display text-lg text-ivory">
-                  {s.courseName} {s.level ? `– ${s.level}` : ""} {s.room ? <span className="text-xs text-muted">· {s.room}</span> : null}
-                  {s.cancelled && <span className="ml-2 text-xs text-wine">(abgesagt)</span>}
-                </h3>
-                <div className="flex items-center gap-3">
-                  <span className={`text-xs ${overbooked ? "text-red-500 font-bold" : "text-muted"}`}>
-                    {s.date} · {s.time?.slice(0, 5)} · {s.participants.length}/{s.capacity}{overbooked ? " ÜBERBUCHT" : ""}
+      {tab === "anmeldungen" && (() => {
+        const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+        const sessionsByDate: Record<string, any[]> = {};
+        sessions.forEach((s) => { (sessionsByDate[s.date] ??= []).push(s); });
+        Object.values(sessionsByDate).forEach((list) => list.sort((a, b) => (a.time ?? "").localeCompare(b.time ?? "")));
+        const isCurrentWeek = isSameDay(weekStart, currentWeekStart);
+        const pickerGrid = (() => {
+          const firstOfMonth = new Date(pickerMonth.getFullYear(), pickerMonth.getMonth(), 1);
+          const gridStart = getMonday(firstOfMonth);
+          return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+        })();
+        const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
+
+        return (
+          <div>
+            <div className="flex items-center justify-center gap-3 mb-8">
+              <button
+                onClick={() => setWeekStart(getMonday(addDays(weekStart, -7)))}
+                disabled={isCurrentWeek}
+                className="p-2 rounded-full border border-border text-muted disabled:opacity-30 disabled:cursor-not-allowed hover:text-gold"
+                aria-label="Vorherige Woche"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <div className="relative">
+                <button
+                  onClick={() => { setPickerMonth(new Date(weekStart.getFullYear(), weekStart.getMonth(), 1)); setShowPicker((v) => !v); }}
+                  className="px-4 py-2 rounded-full border border-border text-sm text-ivory hover:border-gold flex items-center gap-2"
+                >
+                  <span className="text-gold font-medium">KW {getISOWeek(weekStart)}</span>
+                  <span className="text-muted text-xs">
+                    {formatDateOnly(weekStart).split("-").reverse().slice(0, 2).join(".")}. – {formatDateOnly(addDays(weekStart, 6)).split("-").reverse().slice(0, 2).join(".")}.{addDays(weekStart, 6).getFullYear()}
                   </span>
-                  <button onClick={() => toggleCancelled(s.id, !s.cancelled)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">
-                    {s.cancelled ? "Wieder aktivieren" : "Termin absagen"}
-                  </button>
-                </div>
+                </button>
+                {showPicker && (
+                  <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 z-30 w-72 rounded-2xl border border-border bg-surface p-4 shadow-xl">
+                    <div className="flex items-center justify-between mb-3">
+                      <button onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() - 1, 1))} className="p-1 text-muted hover:text-gold">
+                        <ChevronLeft size={16} />
+                      </button>
+                      <span className="text-sm text-ivory font-medium">{MONTH_LABEL[pickerMonth.getMonth()]} {pickerMonth.getFullYear()}</span>
+                      <button onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 1))} className="p-1 text-muted hover:text-gold">
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-muted mb-1">
+                      {WEEKDAY_SHORT.map((d) => <div key={d}>{d}</div>)}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1">
+                      {pickerGrid.map((d, i) => {
+                        const inMonth = d.getMonth() === pickerMonth.getMonth();
+                        const isToday = isSameDay(d, today);
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => { setWeekStart(getMonday(d)); setShowPicker(false); }}
+                            className={`text-xs py-1.5 rounded-lg ${isToday ? "bg-gold text-bg font-semibold" : inMonth ? "text-ivory hover:bg-bg" : "text-muted/40 hover:bg-bg"}`}
+                          >
+                            {d.getDate()}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
-              {s.participants.length === 0 ? (
-                <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
-              ) : (
-                <ul className="mt-2 text-sm text-ivory space-y-2">
-                  {s.participants.map((p: any, i: number) => (
-                    <li key={i} className="flex items-center gap-1.5 flex-wrap">
-                      {p.name} <span className="text-muted">— {p.email}</span>
-                      {p.source === "enrollment" && (
-                        <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
-                      )}
-                      {!p.hasActiveProduct && (
-                        <span className="flex items-center gap-1 text-xs text-gold ml-1" title="Kein aktives, passendes Produkt hinterlegt">
-                          <AlertTriangle size={12} /> kein aktives Produkt
-                        </span>
-                      )}
-                      {p.availableProducts?.length > 0 && (
-                        <select
-                          defaultValue={p.customerProductId ?? ""}
-                          onChange={(e) => saveBookingProduct(p.bookingId, e.target.value)}
-                          className="text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory"
-                        >
-                          <option value="">Produkt zuordnen…</option>
-                          {p.availableProducts.map((prod: any) => <option key={prod.id} value={prod.id}>{prod.name}</option>)}
-                        </select>
-                      )}
-                      <input
-                        placeholder="Kommentar (z.B. Zahlung fehlt)"
-                        defaultValue={p.notes}
-                        onBlur={(e) => { if (e.target.value !== p.notes) saveBookingNote(p.bookingId, e.target.value); }}
-                        className="ml-auto text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory w-56"
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <button
+                onClick={() => setWeekStart(getMonday(addDays(weekStart, 7)))}
+                className="p-2 rounded-full border border-border text-muted hover:text-gold"
+                aria-label="Nächste Woche"
+              >
+                <ChevronRight size={16} />
+              </button>
             </div>
-          );})}
-        </div>
-      )}
+
+            <div className="overflow-x-auto" onClick={() => showPicker && setShowPicker(false)}>
+              <div className="grid grid-cols-7 gap-3 min-w-[900px]">
+                {weekDays.map((day) => {
+                  const dateStr = formatDateOnly(day);
+                  const list = sessionsByDate[dateStr] ?? [];
+                  const isToday = isSameDay(day, today);
+                  return (
+                    <div key={dateStr}>
+                      <div className={`text-center mb-3 pb-2 border-b ${isToday ? "border-gold" : "border-border"}`}>
+                        <div className={`font-display italic text-lg ${isToday ? "text-gold" : "text-ivory"}`}>{WEEKDAY_SHORT[day.getDay() === 0 ? 6 : day.getDay() - 1]}</div>
+                        <div className="text-xs text-muted">{String(day.getDate()).padStart(2, "0")}.{String(day.getMonth() + 1).padStart(2, "0")}.</div>
+                      </div>
+                      <div className="space-y-2">
+                        {list.length === 0 && <p className="text-xs text-muted text-center">–</p>}
+                        {list.map((s) => {
+                          const overbooked = s.participants.length > s.capacity;
+                          const isSelected = s.id === selectedSessionId;
+                          return (
+                            <button
+                              key={s.id}
+                              onClick={() => setSelectedSessionId(isSelected ? null : s.id)}
+                              className={`w-full text-left rounded-xl p-3 border text-xs transition-colors ${
+                                overbooked ? "border-2 border-red-500" : isSelected ? "border-gold" : "border-border"
+                              } bg-surface ${isSelected ? "ring-1 ring-gold" : ""}`}
+                            >
+                              <div className="text-ivory font-medium">{s.courseName}</div>
+                              {s.room && <div className="text-muted mt-0.5">{s.room}</div>}
+                              <div className={`mt-1 ${overbooked ? "text-red-500 font-bold" : "text-muted"}`}>
+                                {s.time?.slice(0, 5)} · {s.participants.length}/{s.capacity}{overbooked ? " ÜBERBUCHT" : ""}
+                              </div>
+                              {s.cancelled && <div className="text-wine mt-0.5">abgesagt</div>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedSession && (
+              <div className={`mt-8 rounded-2xl p-5 border bg-surface ${selectedSession.participants.length > selectedSession.capacity ? "border-2 border-red-500" : "border-border"}`}>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h3 className="font-display text-lg text-ivory">
+                    {selectedSession.courseName} {selectedSession.level ? `– ${selectedSession.level}` : ""} {selectedSession.room ? <span className="text-xs text-muted">· {selectedSession.room}</span> : null}
+                    {selectedSession.cancelled && <span className="ml-2 text-xs text-wine">(abgesagt)</span>}
+                  </h3>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-xs ${selectedSession.participants.length > selectedSession.capacity ? "text-red-500 font-bold" : "text-muted"}`}>
+                      {selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {selectedSession.participants.length}/{selectedSession.capacity}
+                      {selectedSession.participants.length > selectedSession.capacity ? " ÜBERBUCHT" : ""}
+                    </span>
+                    <button onClick={() => toggleCancelled(selectedSession.id, !selectedSession.cancelled)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">
+                      {selectedSession.cancelled ? "Wieder aktivieren" : "Termin absagen"}
+                    </button>
+                    <button onClick={() => setSelectedSessionId(null)} className="text-xs text-muted underline">Schließen</button>
+                  </div>
+                </div>
+                {selectedSession.participants.length === 0 ? (
+                  <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
+                ) : (
+                  <ul className="mt-3 text-sm text-ivory space-y-2">
+                    {selectedSession.participants.map((p: any, i: number) => (
+                      <li key={i} className="flex items-center gap-1.5 flex-wrap">
+                        {p.name} <span className="text-muted">— {p.email}</span>
+                        {p.source === "enrollment" && (
+                          <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
+                        )}
+                        {!p.hasActiveProduct && (
+                          <span className="flex items-center gap-1 text-xs text-gold ml-1" title="Kein aktives, passendes Produkt hinterlegt">
+                            <AlertTriangle size={12} /> kein aktives Produkt
+                          </span>
+                        )}
+                        {p.availableProducts?.length > 0 && (
+                          <select
+                            defaultValue={p.customerProductId ?? ""}
+                            onChange={(e) => saveBookingProduct(p.bookingId, e.target.value)}
+                            className="text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory"
+                          >
+                            <option value="">Produkt zuordnen…</option>
+                            {p.availableProducts.map((prod: any) => <option key={prod.id} value={prod.id}>{prod.name}</option>)}
+                          </select>
+                        )}
+                        <input
+                          placeholder="Kommentar (z.B. Zahlung fehlt)"
+                          defaultValue={p.notes}
+                          onBlur={(e) => { if (e.target.value !== p.notes) saveBookingNote(p.bookingId, e.target.value); }}
+                          className="ml-auto text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory w-56"
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {tab === "kurse" && (
         <div className="space-y-8">
@@ -784,34 +941,6 @@ export default function AdminPage() {
                 )}
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {tab === "kursplan" && (
-        <div className="overflow-x-auto">
-          <div className="grid grid-cols-7 gap-3 min-w-[900px]">
-            {WEEKDAYS.map((wd) => {
-              const dayCourses = courses
-                .filter((c) => c.active && c.weekday === wd.value)
-                .sort((a, b) => (a.start_time ?? "").localeCompare(b.start_time ?? ""));
-              return (
-                <div key={wd.value}>
-                  <h3 className="font-display text-lg text-ivory mb-3 text-center">{wd.label}</h3>
-                  <div className="space-y-2">
-                    {dayCourses.length === 0 && <p className="text-xs text-muted text-center">–</p>}
-                    {dayCourses.map((c) => (
-                      <div key={c.id} className="rounded-xl p-3 border border-border bg-surface text-xs">
-                        <div className="text-gold font-medium">{c.start_time?.slice(0, 5)}</div>
-                        <div className="text-ivory mt-0.5">{c.name}</div>
-                        <div className="text-muted mt-0.5">{c.level ? `${c.level} · ` : ""}{c.room ?? "kein Raum"}</div>
-                        {c.instructor && <div className="text-muted">{c.instructor}</div>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
