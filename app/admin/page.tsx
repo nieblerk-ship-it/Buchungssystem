@@ -10,9 +10,10 @@ const WEEKDAYS = [
 ];
 
 const COURSE_CATEGORIES = ["Pole", "Exotic Pole", "Openclass", "Conditioning", "Shape & Flexibility", "Specials"];
+const ROOMS = ["OC", "Raum 1", "Raum 2", "Raum 3"];
 
 const EMPTY_COURSE = {
-  name: "", category: "Pole", level: "", instructor: "",
+  name: "", category: "Pole", level: "", instructor: "", room: ROOMS[0],
   weekday: 1, start_time: "18:00", duration_minutes: 70, capacity: 8, notes: "",
 };
 const EMPTY_CUSTOMER = { name: "", email: "", phone: "", level: "", notes: "" };
@@ -33,7 +34,8 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "kursplan" | "meldungen">("anmeldungen");
+  const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [sessions, setSessions] = useState<any[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -118,6 +120,15 @@ export default function AdminPage() {
       body: JSON.stringify({ password, bookingId, notes }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Speichern des Kommentars."); return; }
+    await loadSessions();
+  }
+  async function saveBookingProduct(bookingId: string, customerProductId: string) {
+    setActionError(null);
+    const res = await fetch("/api/admin/bookings", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, bookingId, customerProductId }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Zuordnen des Produkts."); return; }
     await loadSessions();
   }
 
@@ -387,8 +398,10 @@ export default function AdminPage() {
         {[
           { id: "anmeldungen", label: "Anmeldungen" },
           { id: "kurse", label: "Kurse verwalten" },
+          { id: "kursplan", label: "Kursplan" },
           { id: "schueler", label: "Schüler:innen" },
           { id: "produkte", label: "Produkte" },
+          { id: "meldungen", label: "Meldungen" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`px-4 py-2 text-sm rounded-full ${tab === t.id ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
@@ -401,15 +414,19 @@ export default function AdminPage() {
 
       {tab === "anmeldungen" && (
         <div className="space-y-4">
-          {sessions.map((s) => (
-            <div key={s.id} className="rounded-2xl p-5 border border-border bg-surface">
+          {sessions.map((s) => {
+            const overbooked = s.participants.length > s.capacity;
+            return (
+            <div key={s.id} className={`rounded-2xl p-5 border bg-surface ${overbooked ? "border-2 border-red-500" : "border-border"}`}>
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <h3 className="font-display text-lg text-ivory">
-                  {s.courseName} {s.level ? `– ${s.level}` : ""}
+                  {s.courseName} {s.level ? `– ${s.level}` : ""} {s.room ? <span className="text-xs text-muted">· {s.room}</span> : null}
                   {s.cancelled && <span className="ml-2 text-xs text-wine">(abgesagt)</span>}
                 </h3>
                 <div className="flex items-center gap-3">
-                  <span className="text-xs text-muted">{s.date} · {s.time?.slice(0, 5)} · {s.participants.length}/{s.capacity}</span>
+                  <span className={`text-xs ${overbooked ? "text-red-500 font-bold" : "text-muted"}`}>
+                    {s.date} · {s.time?.slice(0, 5)} · {s.participants.length}/{s.capacity}{overbooked ? " ÜBERBUCHT" : ""}
+                  </span>
                   <button onClick={() => toggleCancelled(s.id, !s.cancelled)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">
                     {s.cancelled ? "Wieder aktivieren" : "Termin absagen"}
                   </button>
@@ -422,10 +439,23 @@ export default function AdminPage() {
                   {s.participants.map((p: any, i: number) => (
                     <li key={i} className="flex items-center gap-1.5 flex-wrap">
                       {p.name} <span className="text-muted">— {p.email}</span>
+                      {p.source === "enrollment" && (
+                        <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
+                      )}
                       {!p.hasActiveProduct && (
                         <span className="flex items-center gap-1 text-xs text-gold ml-1" title="Kein aktives, passendes Produkt hinterlegt">
                           <AlertTriangle size={12} /> kein aktives Produkt
                         </span>
+                      )}
+                      {p.availableProducts?.length > 0 && (
+                        <select
+                          defaultValue={p.customerProductId ?? ""}
+                          onChange={(e) => saveBookingProduct(p.bookingId, e.target.value)}
+                          className="text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory"
+                        >
+                          <option value="">Produkt zuordnen…</option>
+                          {p.availableProducts.map((prod: any) => <option key={prod.id} value={prod.id}>{prod.name}</option>)}
+                        </select>
                       )}
                       <input
                         placeholder="Kommentar (z.B. Zahlung fehlt)"
@@ -438,7 +468,7 @@ export default function AdminPage() {
                 </ul>
               )}
             </div>
-          ))}
+          );})}
         </div>
       )}
 
@@ -453,6 +483,9 @@ export default function AdminPage() {
                 {COURSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
               <input placeholder="Trainer:in (optional)" value={newCourse.instructor} onChange={(e) => setNewCourse({ ...newCourse, instructor: e.target.value })} className={inputClass} />
+              <select value={newCourse.room} onChange={(e) => setNewCourse({ ...newCourse, room: e.target.value })} className={inputClass}>
+                {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
               <select value={newCourse.weekday} onChange={(e) => setNewCourse({ ...newCourse, weekday: Number(e.target.value) })} className={inputClass}>
                 {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
               </select>
@@ -479,6 +512,9 @@ export default function AdminPage() {
                         {COURSE_CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
                       </select>
                       <input value={editCourse.instructor ?? ""} onChange={(e) => setEditCourse({ ...editCourse, instructor: e.target.value })} placeholder="Trainer:in" className={inputClass} />
+                      <select value={editCourse.room ?? ROOMS[0]} onChange={(e) => setEditCourse({ ...editCourse, room: e.target.value })} className={inputClass}>
+                        {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
                       <select value={editCourse.weekday} onChange={(e) => setEditCourse({ ...editCourse, weekday: Number(e.target.value) })} className={inputClass}>
                         {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
                       </select>
@@ -499,7 +535,7 @@ export default function AdminPage() {
                     <div>
                       <h4 className="font-display text-lg text-ivory">{c.name} {c.level ? `– ${c.level}` : ""} {!c.active && <span className="text-xs text-wine">(inaktiv)</span>}</h4>
                       <p className="text-xs text-muted mt-1">
-                        {WEEKDAYS.find((w) => w.value === c.weekday)?.label} · {c.start_time?.slice(0, 5)} Uhr · {c.duration_minutes} Min · Kapazität {c.capacity} · {c.category}{c.instructor ? ` · ${c.instructor}` : ""}
+                        {WEEKDAYS.find((w) => w.value === c.weekday)?.label} · {c.start_time?.slice(0, 5)} Uhr · {c.duration_minutes} Min · Kapazität {c.capacity} · {c.category}{c.room ? ` · ${c.room}` : ""}{c.instructor ? ` · ${c.instructor}` : ""}
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -751,6 +787,80 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
+      {tab === "kursplan" && (
+        <div className="overflow-x-auto">
+          <div className="grid grid-cols-7 gap-3 min-w-[900px]">
+            {WEEKDAYS.map((wd) => {
+              const dayCourses = courses
+                .filter((c) => c.active && c.weekday === wd.value)
+                .sort((a, b) => (a.start_time ?? "").localeCompare(b.start_time ?? ""));
+              return (
+                <div key={wd.value}>
+                  <h3 className="font-display text-lg text-ivory mb-3 text-center">{wd.label}</h3>
+                  <div className="space-y-2">
+                    {dayCourses.length === 0 && <p className="text-xs text-muted text-center">–</p>}
+                    {dayCourses.map((c) => (
+                      <div key={c.id} className="rounded-xl p-3 border border-border bg-surface text-xs">
+                        <div className="text-gold font-medium">{c.start_time?.slice(0, 5)}</div>
+                        <div className="text-ivory mt-0.5">{c.name}</div>
+                        <div className="text-muted mt-0.5">{c.level ? `${c.level} · ` : ""}{c.room ?? "kein Raum"}</div>
+                        {c.instructor && <div className="text-muted">{c.instructor}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab === "meldungen" && (() => {
+        const alerts: { severity: "rot" | "gelb"; type: string; message: string; key: string }[] = [];
+        sessions.forEach((s) => {
+          if (s.participants.length > s.capacity) {
+            alerts.push({
+              severity: "rot", type: "Überbuchung",
+              message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): ${s.participants.length}/${s.capacity} Plätze belegt`,
+              key: `ob-${s.id}`,
+            });
+          }
+          s.participants.forEach((p: any, i: number) => {
+            if (p.notes) {
+              alerts.push({ severity: "gelb", type: "Kommentar", message: `${p.name} – ${s.courseName} (${s.date}): "${p.notes}"`, key: `note-${s.id}-${i}` });
+            }
+            if (!p.hasActiveProduct) {
+              alerts.push({ severity: "gelb", type: "Kein aktives Produkt", message: `${p.name} – ${s.courseName} (${s.date})`, key: `prod-${s.id}-${i}` });
+            }
+          });
+        });
+        const filtered = alerts.filter((a) => alertFilter === "alle" || a.severity === alertFilter);
+        return (
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              {(["alle", "rot", "gelb"] as const).map((f) => (
+                <button key={f} onClick={() => setAlertFilter(f)}
+                  className={`px-4 py-2 text-sm rounded-full ${alertFilter === f ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+                  {f === "alle" ? "Alle" : f === "rot" ? "Rot" : "Gelb"}
+                </button>
+              ))}
+            </div>
+            {filtered.length === 0 ? (
+              <p className="text-sm text-muted">Keine Meldungen.</p>
+            ) : (
+              <ul className="space-y-2">
+                {filtered.map((a) => (
+                  <li key={a.key} className={`rounded-xl p-4 border-l-4 bg-surface text-sm text-ivory ${a.severity === "rot" ? "border-red-500" : "border-yellow-400"}`}>
+                    <span className={`text-xs font-semibold mr-2 ${a.severity === "rot" ? "text-red-500" : "text-yellow-400"}`}>{a.type}</span>
+                    {a.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

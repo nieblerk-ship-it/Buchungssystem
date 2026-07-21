@@ -3,9 +3,9 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { checkAdminPassword } from "@/lib/adminAuth";
 
 // GET /api/admin/bookings?password=...
-// Liefert künftige Termine inkl. Teilnehmer:innen. Markiert pro Teilnehmer:in,
-// ob am Termindatum ein aktives, zur Kurskategorie passendes Produkt vorliegt
-// (Punkt 3: nur Hinweis, keine Blockierung).
+// Liefert künftige Termine inkl. Teilnehmer:innen: ob ein aktives, passendes
+// Produkt vorliegt (nur Hinweis), welche aktiven Produkte zur Auswahl stehen,
+// ob die Buchung aus einer festen Zuteilung stammt, und den Raum des Kurses.
 export async function GET(req: Request) {
   const url = new URL(req.url);
   if (!checkAdminPassword(url.searchParams.get("password"))) {
@@ -18,8 +18,8 @@ export async function GET(req: Request) {
     .from("course_sessions")
     .select(
       `id, session_date, cancelled, capacity_override,
-       course:courses ( name, level, category, start_time, capacity ),
-       bookings ( id, status, notes, customer:customers ( id, name, email ) )`
+       course:courses ( name, level, category, room, start_time, capacity ),
+       bookings ( id, status, notes, source, customer_product_id, customer:customers ( id, name, email ) )`
     )
     .gte("session_date", new Date().toISOString().slice(0, 10))
     .order("session_date", { ascending: true });
@@ -35,7 +35,7 @@ export async function GET(req: Request) {
   const { data: customerProducts } = customerIds.length
     ? await db
         .from("customer_products")
-        .select("customer_id, valid_from, valid_until, active, product:products(category, allowed_categories)")
+        .select("id, customer_id, valid_from, valid_until, active, product:products(name, category, allowed_categories)")
         .in("customer_id", customerIds)
         .eq("active", true)
     : { data: [] as any[] };
@@ -51,6 +51,12 @@ export async function GET(req: Request) {
     });
   }
 
+  function productsFor(customerId: string) {
+    return (customerProducts ?? [])
+      .filter((cp: any) => cp.customer_id === customerId)
+      .map((cp: any) => ({ id: cp.id, name: cp.product?.name }));
+  }
+
   const result = (sessions ?? []).map((s: any) => ({
     id: s.id,
     date: s.session_date,
@@ -58,6 +64,7 @@ export async function GET(req: Request) {
     courseName: s.course?.name,
     level: s.course?.level,
     time: s.course?.start_time,
+    room: s.course?.room,
     capacity: s.capacity_override ?? s.course?.capacity,
     participants: (s.bookings ?? [])
       .filter((b: any) => b.status === "confirmed")
@@ -66,6 +73,9 @@ export async function GET(req: Request) {
         name: b.customer?.name,
         email: b.customer?.email,
         notes: b.notes ?? "",
+        source: b.source ?? "self",
+        customerProductId: b.customer_product_id,
+        availableProducts: b.customer?.id ? productsFor(b.customer.id) : [],
         hasActiveProduct: b.customer?.id
           ? hasActiveProduct(b.customer.id, s.course?.category, s.session_date)
           : false,
@@ -76,17 +86,21 @@ export async function GET(req: Request) {
 }
 
 // PATCH /api/admin/bookings
-// body: { password, bookingId, notes }
-// Freitext-Kommentar zu einer Buchung, z.B. "Zahlung fehlt noch".
+// body: { password, bookingId, notes?, customerProductId? }
 export async function PATCH(req: Request) {
   const body = await req.json();
   if (!checkAdminPassword(body.password)) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
-  const { bookingId, notes } = body;
+  const { bookingId, notes, customerProductId } = body;
   if (!bookingId) return NextResponse.json({ error: "Buchungs-ID fehlt." }, { status: 400 });
+
+  const fields: Record<string, unknown> = {};
+  if (notes !== undefined) fields.notes = notes || null;
+  if (customerProductId !== undefined) fields.customer_product_id = customerProductId || null;
+
   const db = supabaseAdmin();
-  const { error } = await db.from("bookings").update({ notes: notes ?? null }).eq("id", bookingId);
+  const { error } = await db.from("bookings").update(fields).eq("id", bookingId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }

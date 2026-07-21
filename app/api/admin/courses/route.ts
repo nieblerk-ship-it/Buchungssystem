@@ -22,7 +22,7 @@ export async function GET(req: Request) {
 }
 
 // POST /api/admin/courses
-// body: { password, name, category, level, instructor, weekday, start_time,
+// body: { password, name, category, level, instructor, room, weekday, start_time,
 //         duration_minutes, capacity, notes }
 // Legt einen neuen Kurs an und erzeugt direkt Termine für die nächsten 4 Wochen.
 export async function POST(req: Request) {
@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   if (!checkPassword(body.password)) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
-  const { name, category, level, instructor, weekday, start_time, duration_minutes, capacity, notes } = body;
+  const { name, category, level, instructor, room, weekday, start_time, duration_minutes, capacity, notes } = body;
 
   if (!name?.trim() || !category?.trim() || !weekday || !start_time || !capacity) {
     return NextResponse.json({ error: "Bitte alle Pflichtfelder ausfüllen." }, { status: 400 });
@@ -44,6 +44,7 @@ export async function POST(req: Request) {
       category: category.trim(),
       level: level?.trim() || null,
       instructor: instructor?.trim() || null,
+      room: room?.trim() || null,
       weekday,
       start_time,
       duration_minutes: duration_minutes || 70,

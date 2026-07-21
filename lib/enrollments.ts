@@ -45,7 +45,7 @@ export async function ensureEnrollmentBookings(db: ReturnType<typeof supabaseAdm
         customer_id: enrollment.customer_id,
         course_session_id: session.id,
         status: "confirmed",
-        notes: "Feste Zuteilung",
+        source: "enrollment",
       });
       if (!error) created++;
     }
