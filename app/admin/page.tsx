@@ -18,7 +18,7 @@ const COURSE_CATEGORIES = ["Pole", "Exotic Pole", "Openclass", "Conditioning", "
 const ROOMS = ["OC", "Raum 1", "Raum 2", "Raum 3"];
 
 const EMPTY_COURSE = {
-  name: "", category: "Pole", level: "", instructor: "", room: ROOMS[0],
+  name: "", category: "Pole", level: "", instructor: "", room: ROOMS[0], trainer_id: "",
   weekday: 1, start_time: "18:00", duration_minutes: 70, capacity: 8, notes: "",
 };
 const EMPTY_CUSTOMER = { name: "", email: "", phone: "", level: "", notes: "" };
@@ -70,8 +70,12 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "meldungen">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "meldungen" | "trainer">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
+  const [trainers, setTrainers] = useState<any[]>([]);
+  const [newTrainer, setNewTrainer] = useState({ name: "", email: "", newPassword: "" });
+  const [resetPasswordFor, setResetPasswordFor] = useState<string | null>(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
 
   const today = useMemo(() => new Date(), []);
   const currentWeekStart = useMemo(() => getMonday(today), [today]);
@@ -122,7 +126,7 @@ export default function AdminPage() {
     }
     setSessions(data.sessions);
     setUnlocked(true);
-    await Promise.all([loadCourses(), loadCustomers(), loadProducts()]);
+    await Promise.all([loadCourses(), loadCustomers(), loadProducts(), loadTrainers()]);
   }
 
   async function loadSessions() {
@@ -144,6 +148,11 @@ export default function AdminPage() {
     const res = await fetch(`/api/admin/products?password=${encodeURIComponent(password)}`);
     const data = await res.json();
     if (res.ok) setProducts(data.products);
+  }
+  async function loadTrainers() {
+    const res = await fetch(`/api/admin/trainers?password=${encodeURIComponent(password)}`);
+    const data = await res.json();
+    if (res.ok) setTrainers(data.trainers);
   }
 
   // ---- Termine (Anmeldungen) ----
@@ -414,6 +423,43 @@ export default function AdminPage() {
     return list.includes(cat) ? list.filter((c) => c !== cat) : [...list, cat];
   }
 
+  // ---- Trainer:innen ----
+  async function createTrainer(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/trainers", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, ...newTrainer }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setNewTrainer({ name: "", email: "", newPassword: "" });
+    await loadTrainers();
+  }
+  async function toggleTrainerActive(id: string, active: boolean) {
+    setActionError(null);
+    const res = await fetch("/api/admin/trainers", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, id, active }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadTrainers();
+  }
+  async function submitResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/trainers", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, id: resetPasswordFor, newPassword: resetPasswordValue }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setResetPasswordFor(null);
+    setResetPasswordValue("");
+  }
+
   if (!unlocked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg px-6">
@@ -443,6 +489,7 @@ export default function AdminPage() {
           { id: "kurse", label: "Kurse verwalten" },
           { id: "schueler", label: "Schüler:innen" },
           { id: "produkte", label: "Produkte" },
+          { id: "trainer", label: "Trainer:innen" },
           { id: "meldungen", label: "Meldungen" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
@@ -643,6 +690,10 @@ export default function AdminPage() {
               <select value={newCourse.room} onChange={(e) => setNewCourse({ ...newCourse, room: e.target.value })} className={inputClass}>
                 {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
+              <select value={newCourse.trainer_id} onChange={(e) => setNewCourse({ ...newCourse, trainer_id: e.target.value })} className={inputClass}>
+                <option value="">Trainer-Konto: keins</option>
+                {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>Konto: {t.name}</option>)}
+              </select>
               <select value={newCourse.weekday} onChange={(e) => setNewCourse({ ...newCourse, weekday: Number(e.target.value) })} className={inputClass}>
                 {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
               </select>
@@ -671,6 +722,10 @@ export default function AdminPage() {
                       <input value={editCourse.instructor ?? ""} onChange={(e) => setEditCourse({ ...editCourse, instructor: e.target.value })} placeholder="Trainer:in" className={inputClass} />
                       <select value={editCourse.room ?? ROOMS[0]} onChange={(e) => setEditCourse({ ...editCourse, room: e.target.value })} className={inputClass}>
                         {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                      <select value={editCourse.trainer_id ?? ""} onChange={(e) => setEditCourse({ ...editCourse, trainer_id: e.target.value || null })} className={inputClass}>
+                        <option value="">Trainer-Konto: keins</option>
+                        {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>Konto: {t.name}</option>)}
                       </select>
                       <select value={editCourse.weekday} onChange={(e) => setEditCourse({ ...editCourse, weekday: Number(e.target.value) })} className={inputClass}>
                         {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
@@ -938,6 +993,48 @@ export default function AdminPage() {
                       {p.active && <button onClick={() => deactivateProduct(p.id, p.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Deaktivieren</button>}
                     </div>
                   </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === "trainer" && (
+        <div className="space-y-8">
+          <form onSubmit={createTrainer} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
+            <h3 className="font-display text-lg text-ivory mb-2">Neues Trainer-Konto anlegen</h3>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <input required placeholder="Name" value={newTrainer.name} onChange={(e) => setNewTrainer({ ...newTrainer, name: e.target.value })} className={inputClass} />
+              <input required type="email" placeholder="E-Mail (Login)" value={newTrainer.email} onChange={(e) => setNewTrainer({ ...newTrainer, email: e.target.value })} className={inputClass} />
+              <input required type="text" placeholder="Passwort (mind. 6 Zeichen)" value={newTrainer.newPassword} onChange={(e) => setNewTrainer({ ...newTrainer, newPassword: e.target.value })} className={inputClass} />
+            </div>
+            <p className="text-xs text-muted">Gib der Trainerin E-Mail und Passwort weiter, damit sie sich unter /trainer einloggen kann.</p>
+            <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">{saving ? "Speichere…" : "Konto anlegen"}</button>
+          </form>
+
+          <div className="space-y-3">
+            <h3 className="font-display text-lg text-ivory">Bestehende Trainer:innen</h3>
+            {trainers.map((t) => (
+              <div key={t.id} className="rounded-2xl p-5 border border-border bg-surface">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <h4 className="font-display text-lg text-ivory">{t.name} {!t.active && <span className="text-xs text-wine">(deaktiviert)</span>}</h4>
+                    <p className="text-xs text-muted">{t.email}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setResetPasswordFor(t.id); setResetPasswordValue(""); }} className="text-xs px-3 py-1 rounded-full border border-border text-muted">Passwort zurücksetzen</button>
+                    <button onClick={() => toggleTrainerActive(t.id, !t.active)} className={`text-xs px-3 py-1 rounded-full border border-border ${t.active ? "text-wine" : "text-gold"}`}>
+                      {t.active ? "Deaktivieren" : "Aktivieren"}
+                    </button>
+                  </div>
+                </div>
+                {resetPasswordFor === t.id && (
+                  <form onSubmit={submitResetPassword} className="mt-3 p-3 rounded-xl bg-bg border border-border flex gap-2 items-center">
+                    <input required placeholder="Neues Passwort (mind. 6 Zeichen)" value={resetPasswordValue} onChange={(e) => setResetPasswordValue(e.target.value)} className={inputClass} />
+                    <button type="submit" disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60 shrink-0">{saving ? "…" : "Setzen"}</button>
+                    <button type="button" onClick={() => setResetPasswordFor(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted shrink-0">Abbrechen</button>
+                  </form>
                 )}
               </div>
             ))}

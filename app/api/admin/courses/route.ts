@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   if (!checkPassword(body.password)) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
-  const { name, category, level, instructor, room, weekday, start_time, duration_minutes, capacity, notes } = body;
+  const { name, category, level, instructor, room, trainer_id, weekday, start_time, duration_minutes, capacity, notes } = body;
 
   if (!name?.trim() || !category?.trim() || !weekday || !start_time || !capacity) {
     return NextResponse.json({ error: "Bitte alle Pflichtfelder ausfüllen." }, { status: 400 });
@@ -45,6 +45,7 @@ export async function POST(req: Request) {
       level: level?.trim() || null,
       instructor: instructor?.trim() || null,
       room: room?.trim() || null,
+      trainer_id: trainer_id || null,
       weekday,
       start_time,
       duration_minutes: duration_minutes || 70,

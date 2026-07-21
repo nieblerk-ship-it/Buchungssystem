@@ -148,13 +148,21 @@ export default function Home() {
         style={{ background: "linear-gradient(to bottom, transparent, #C9A15E33 8%, #C9A15E33 92%, transparent)" }}
       />
 
-      <Link
-        href="/admin"
-        className="fixed top-5 right-5 z-30 inline-flex items-center gap-1.5 text-xs text-muted hover:text-gold transition-colors bg-surface border border-border rounded-full px-3 py-2"
-      >
-        <Settings size={12} />
-        Login
-      </Link>
+      <div className="fixed top-5 right-5 z-30 flex items-center gap-2">
+        <Link
+          href="/trainer"
+          className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-gold transition-colors bg-surface border border-border rounded-full px-3 py-2"
+        >
+          Trainer-Login
+        </Link>
+        <Link
+          href="/admin"
+          className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-gold transition-colors bg-surface border border-border rounded-full px-3 py-2"
+        >
+          <Settings size={12} />
+          Admin
+        </Link>
+      </div>
 
       <header className="relative z-10 px-6 md:px-12 pt-10 pb-8 text-center">
         <div className="inline-flex items-center gap-2 text-xs tracking-[0.3em] uppercase mb-4 text-gold">

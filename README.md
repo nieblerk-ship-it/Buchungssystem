@@ -98,7 +98,115 @@ supabase/schema.sql            Datenbankschema
 supabase/seed.sql              Echte Kurs-Levels als Startpunkt
 ```
 
+## Phase 1 – Produkte & Schülerverwaltung (Update)
+
+Zusätzlich zu schema.sql/seed.sql jetzt einmalig in Supabase (SQL Editor) ausführen:
+
+1. `supabase/migration_02_products.sql` (neue Tabellen: products, customer_products;
+   neue Spalte customers.level)
+2. `supabase/migration_02_seed_products.sql` (Platzhalter-Produkte — Preise,
+   Guthaben und Laufzeiten bitte danach in Supabase unter Table Editor →
+   products auf die echten Werte korrigieren, ich konnte sie nicht zuverlässig
+   von der Website ablesen)
+
+Neu im Admin-Bereich (zwei zusätzliche Reiter):
+
+- **Schüler:innen**: anlegen, bearbeiten, entfernen, Produkte zuweisen/verlängern/
+  ändern (auch rückwirkend oder nach Ablauf möglich)
+- **Produkte**: Kartentypen/Abos anlegen, inkl. Preis, Guthaben, Gültigkeitsdauer,
+  ob die Zahlung pro Termin bestätigt werden muss, und für welche Kurs-Kategorien
+  das Produkt gilt
+
+Im Reiter **Anmeldungen** erscheint jetzt bei Teilnehmer:innen ohne aktives,
+passendes Produkt ein gelber Hinweis "kein aktives Produkt" — die Buchung wird
+dadurch nicht blockiert.
+
+Der Login-Link ist jetzt oben rechts auf der Buchungsseite statt im Footer.
+
+## Phase 2 – Zugriffsrechte & Bestätigungsdialoge (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_04_access_control.sql`
+
+Neue Regel für Buchbarkeit (greift auf der öffentlichen Buchungsseite):
+
+1. Gibt es eine explizite **Freigabe** oder **Sperre** für diese:n Schüler:in
+   bei diesem Kurs (im Admin-Bereich gesetzt) → die gewinnt immer.
+2. Sonst: Buchung ist erlaubt, wenn ein **aktives Produkt** vorliegt, dessen
+   erlaubte Kategorien den Kurs abdecken (oder das Produkt keine Einschränkung hat).
+3. Sonst: Buchung wird mit einer Fehlermeldung abgelehnt.
+
+**Wichtiger Hinweis:** Da Schüler:innen sich nicht einloggen, kann die
+Buchungsseite ihnen nicht von vornherein nur "ihre" Kurse anzeigen — alle
+künftigen Kurse bleiben sichtbar, eine Sperre/fehlende Freigabe greift erst
+beim Versuch zu buchen (klare Fehlermeldung statt Blockierung der Ansicht).
+
+Neu im Reiter **Schüler:innen** pro Person:
+
+- **Freigaben**: einzelne Kurse gezielt freigeben oder sperren, unabhängig vom Produkt
+- **Feste Zuteilung**: Person automatisch (ohne eigene Buchung) für einen Kurs
+  eintragen, dauerhaft oder befristet auf einen Zeitraum — bucht sofort alle
+  passenden künftigen Termine und auch neu erzeugte Termine automatisch mit
+
+Bestätigungsdialoge gibt es jetzt bei: Kurs-Wochentag/Uhrzeit ändern, Kurs
+deaktivieren, Schüler:in entfernen, Kurs sperren, feste Zuteilung anlegen.
+
+## Phase 2 Ergänzungen (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_05_rooms_sources_products.sql`
+
+- **Räume**: Kurse haben jetzt ein Raum-Feld (OC, Raum 1, Raum 2, Raum 3),
+  einstellbar in "Kurse verwalten"
+- **Kursplan-Reiter**: Wochenübersicht mit 7 Spalten (Mo–So), pro Tag die
+  Kurse zeitlich sortiert mit Raum und Level
+- **Fest zugeteilt vs. Kommentar getrennt**: automatisch durch feste
+  Zuteilung entstandene Buchungen zeigen jetzt ein eigenes Abzeichen "Fest
+  zugeteilt" statt das Kommentarfeld zu belegen — das Kommentarfeld bleibt
+  frei für eigene Notizen wie "Zahlung fehlt". Feste Zuteilungen zählen dabei
+  ganz normal wie Einzelbuchungen zur Kapazität.
+- **Produktauswahl je Buchung**: hat eine Person mehrere aktive Produkte
+  (z. B. Kursabo + zusätzliche 5er-Karte), lässt sich im Reiter "Anmeldungen"
+  pro Buchung auswählen, welches Produkt dafür verwendet wurde. Das ist
+  aktuell rein zur Dokumentation — ein automatischer Guthaben-Abzug ist noch
+  nicht eingebaut, das würde sich anbieten, sobald die Anwesenheits-Checkliste
+  (Phase 4) kommt.
+- **Überbuchung**: Termine, bei denen mehr Personen eingetragen sind als
+  Kapazität vorhanden ist (z. B. durch feste Zuteilung trotz vollem Kurs),
+  werden im Reiter "Anmeldungen" kräftig rot markiert.
+- **Meldungen-Reiter**: sammelt Überbuchungen (rot), offene Kommentare und
+  fehlende aktive Produkte (gelb) an einem Ort, nach Farbe filterbar.
+
+## Phase 3 – Trainer-Logins & Trainer-Bereich (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_06_trainers.sql`
+
+Neue Umgebungsvariable in `.env.local` ergänzen (siehe `.env.example`):
+
+```
+TRAINER_SESSION_SECRET=irgendein-langer-zufaelliger-text
+```
+
+(Falls du sie weglässt, wird ersatzweise `ADMIN_PASSWORD` als Secret verwendet
+— funktioniert, ist aber weniger sauber getrennt. Ein eigener, langer,
+zufälliger Text ist empfehlenswert.)
+
+Neu:
+
+- **Trainer-Konten** (Reiter "Trainer:innen" im Admin-Bereich): Name, E-Mail
+  und Passwort vergeben, Passwort später zurücksetzen, Konto deaktivieren.
+- **Trainer-Login** unter **/trainer** (eigener Login-Button auf der
+  Buchungsseite oben rechts, getrennt vom Admin-Login) — Passwörter werden
+  sicher gehasht gespeichert (bcrypt), nie im Klartext.
+- Beim Kurs anlegen/bearbeiten lässt sich ein **Trainer-Konto** zuordnen
+  (zusätzlich zum bisherigen freien Textfeld "Trainer:in", das für Gastdozent:innen
+  ohne eigenes Konto weiter nutzbar bleibt).
+- Trainer:innen sehen unter /trainer **nur ihre eigenen Kurse** in derselben
+  Wochenkalender-Ansicht wie der Admin-Bereich — aktuell rein lesend (Namen,
+  E-Mails, Kommentare, "Fest zugeteilt"-Badges), ohne Bearbeitungsmöglichkeiten.
+  Das ändert sich mit der Anwesenheits-Checkliste in Phase 4.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
+
+
 
 - **Zahlung**: Drop-in/Fünfer-/Zehnerkarten, Kurs-Abos mit Laufzeit — euer
   Preismodell ist recht komplex (siehe vertical-ballerina.de/preise), das
