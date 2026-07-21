@@ -431,7 +431,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-bg px-6 py-10 max-w-4xl mx-auto">
+    <div className="min-h-screen bg-bg px-6 py-10 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="font-display text-3xl text-ivory">Admin</h1>
         <Link href="/" className="flex items-center gap-1 text-xs text-muted"><ArrowLeft size={12} /> Zur Buchungsseite</Link>
@@ -530,7 +530,7 @@ export default function AdminPage() {
             </div>
 
             <div className="overflow-x-auto" onClick={() => showPicker && setShowPicker(false)}>
-              <div className="grid grid-cols-7 gap-3 min-w-[900px]">
+              <div className="grid grid-cols-7 gap-3 min-w-[760px]">
                 {weekDays.map((day) => {
                   const dateStr = formatDateOnly(day);
                   const list = sessionsByDate[dateStr] ?? [];
