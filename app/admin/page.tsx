@@ -49,6 +49,14 @@ export default function AdminPage() {
   const [assigningFor, setAssigningFor] = useState<string | null>(null);
   const [assignForm, setAssignForm] = useState<any>({ productId: "", valid_from: "", valid_until: "", credits_total: "", isReduced: false });
 
+  const [accessPanelFor, setAccessPanelFor] = useState<string | null>(null);
+  const [overrides, setOverrides] = useState<any[]>([]);
+  const [overrideForm, setOverrideForm] = useState<any>({ courseId: "", access: "allow", notes: "" });
+
+  const [enrollPanelFor, setEnrollPanelFor] = useState<string | null>(null);
+  const [enrollments, setEnrollments] = useState<any[]>([]);
+  const [enrollForm, setEnrollForm] = useState<any>({ courseId: "", valid_from: "", valid_until: "", notes: "" });
+
   const [newProduct, setNewProduct] = useState<any>(EMPTY_PRODUCT);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [editProduct, setEditProduct] = useState<any>(null);
@@ -227,6 +235,69 @@ export default function AdminPage() {
     const res = await fetch(`/api/admin/customer-products?password=${encodeURIComponent(password)}&id=${cpId}`, { method: "DELETE" });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadCustomers();
+  }
+
+  // ---- Kurs-Freigaben ----
+  async function openAccessPanel(customerId: string) {
+    setAccessPanelFor(customerId);
+    setEnrollPanelFor(null);
+    setOverrideForm({ courseId: courses.find((c) => c.active)?.id ?? "", access: "allow", notes: "" });
+    const res = await fetch(`/api/admin/course-access?password=${encodeURIComponent(password)}&customerId=${customerId}`);
+    const data = await res.json();
+    if (res.ok) setOverrides(data.overrides);
+  }
+  async function submitOverride(e: React.FormEvent) {
+    e.preventDefault();
+    if (overrideForm.access === "deny" && !confirm("Diese Person wird damit von der Buchung dieses Kurses ausgeschlossen — auch wenn ein passendes Produkt vorliegt. Fortfahren?")) {
+      return;
+    }
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/course-access", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, customerId: accessPanelFor, ...overrideForm }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    await openAccessPanel(accessPanelFor!);
+  }
+  async function removeOverride(id: string) {
+    setActionError(null);
+    const res = await fetch(`/api/admin/course-access?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await openAccessPanel(accessPanelFor!);
+  }
+
+  // ---- Feste Zuteilung ----
+  async function openEnrollPanel(customerId: string) {
+    setEnrollPanelFor(customerId);
+    setAccessPanelFor(null);
+    setEnrollForm({ courseId: courses.find((c) => c.active)?.id ?? "", valid_from: new Date().toISOString().slice(0, 10), valid_until: "", notes: "" });
+    const res = await fetch(`/api/admin/enrollments?password=${encodeURIComponent(password)}&customerId=${customerId}`);
+    const data = await res.json();
+    if (res.ok) setEnrollments(data.enrollments);
+  }
+  async function submitEnrollment(e: React.FormEvent) {
+    e.preventDefault();
+    const course = courses.find((c) => c.id === enrollForm.courseId);
+    if (!confirm(`"${course?.name}" fest für diese:n Schüler:in eintragen? Dabei werden alle passenden künftigen Termine sofort automatisch gebucht — auch wenn sie eigentlich schon voll sind. Fortfahren?`)) return;
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/enrollments", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, customerId: enrollPanelFor, ...enrollForm }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    await openEnrollPanel(enrollPanelFor!);
+    await loadSessions();
+  }
+  async function removeEnrollment(id: string) {
+    if (!confirm("Diese feste Zuteilung beenden? Bereits gebuchte Termine bleiben bestehen und müssten separat im Reiter \"Anmeldungen\" entfernt werden.")) return;
+    setActionError(null);
+    const res = await fetch(`/api/admin/enrollments?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await openEnrollPanel(enrollPanelFor!);
   }
 
   // ---- Produkte ----
@@ -482,8 +553,10 @@ export default function AdminPage() {
                         <h4 className="font-display text-lg text-ivory">{c.name} {c.level ? <span className="text-xs text-muted">· {c.level}</span> : null}</h4>
                         <p className="text-xs text-muted">{c.email}{c.phone ? ` · ${c.phone}` : ""}</p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         <button onClick={() => startAssign(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Produkt zuweisen</button>
+                        <button onClick={() => openAccessPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Freigaben</button>
+                        <button onClick={() => openEnrollPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Feste Zuteilung</button>
                         <button onClick={() => startEditCustomer(c)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">Bearbeiten</button>
                         <button onClick={() => deleteCustomer(c.id, c.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Entfernen</button>
                       </div>
@@ -525,6 +598,67 @@ export default function AdminPage() {
                           <button type="button" onClick={() => setAssigningFor(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
                         </div>
                       </form>
+                    )}
+
+                    {accessPanelFor === c.id && (
+                      <div className="mt-3 p-3 rounded-xl bg-bg border border-border space-y-3">
+                        <p className="text-xs text-muted">
+                          Ohne Eintrag hier gilt die Standardregel: Zugriff über ein aktives, passendes Produkt.
+                          Eine Freigabe erlaubt den Kurs unabhängig vom Produkt, eine Sperre blockiert ihn unabhängig vom Produkt.
+                        </p>
+                        {overrides.length > 0 && (
+                          <ul className="space-y-1.5">
+                            {overrides.map((o: any) => (
+                              <li key={o.id} className="text-xs text-ivory flex items-center gap-2 flex-wrap">
+                                <span className={`px-2 py-0.5 rounded-full border ${o.access === "allow" ? "border-gold text-gold" : "border-wine text-wine"}`}>
+                                  {o.access === "allow" ? "Freigegeben" : "Gesperrt"}
+                                </span>
+                                {o.course?.name}
+                                <button onClick={() => removeOverride(o.id)} className="text-wine underline">entfernen</button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <form onSubmit={submitOverride} className="grid sm:grid-cols-3 gap-2">
+                          <select value={overrideForm.courseId} onChange={(e) => setOverrideForm({ ...overrideForm, courseId: e.target.value })} className={inputClass}>
+                            {courses.filter((co) => co.active).map((co) => <option key={co.id} value={co.id}>{co.name}</option>)}
+                          </select>
+                          <select value={overrideForm.access} onChange={(e) => setOverrideForm({ ...overrideForm, access: e.target.value })} className={inputClass}>
+                            <option value="allow">Freigeben</option>
+                            <option value="deny">Sperren</option>
+                          </select>
+                          <button type="submit" disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">{saving ? "Speichere…" : "Setzen"}</button>
+                        </form>
+                        <button type="button" onClick={() => setAccessPanelFor(null)} className="text-xs text-muted underline">Schließen</button>
+                      </div>
+                    )}
+
+                    {enrollPanelFor === c.id && (
+                      <div className="mt-3 p-3 rounded-xl bg-bg border border-border space-y-3">
+                        <p className="text-xs text-muted">
+                          Trägt die Person automatisch in alle passenden künftigen Termine dieses Kurses ein — ohne eigene Buchung.
+                        </p>
+                        {enrollments.filter((en: any) => en.active).length > 0 && (
+                          <ul className="space-y-1.5">
+                            {enrollments.filter((en: any) => en.active).map((en: any) => (
+                              <li key={en.id} className="text-xs text-ivory flex items-center gap-2 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-full bg-surface border border-border">{en.course?.name}</span>
+                                <span className="text-muted">{en.valid_from} – {en.valid_until ?? "bis auf Weiteres"}</span>
+                                <button onClick={() => removeEnrollment(en.id)} className="text-wine underline">beenden</button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <form onSubmit={submitEnrollment} className="grid sm:grid-cols-3 gap-2">
+                          <select value={enrollForm.courseId} onChange={(e) => setEnrollForm({ ...enrollForm, courseId: e.target.value })} className={inputClass}>
+                            {courses.filter((co) => co.active).map((co) => <option key={co.id} value={co.id}>{co.name}</option>)}
+                          </select>
+                          <input type="date" value={enrollForm.valid_from} onChange={(e) => setEnrollForm({ ...enrollForm, valid_from: e.target.value })} className={inputClass} />
+                          <input type="date" placeholder="Bis (optional)" value={enrollForm.valid_until} onChange={(e) => setEnrollForm({ ...enrollForm, valid_until: e.target.value })} className={inputClass} />
+                          <button type="submit" disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60 sm:col-span-3">{saving ? "Trage ein…" : "Fest zuteilen"}</button>
+                        </form>
+                        <button type="button" onClick={() => setEnrollPanelFor(null)} className="text-xs text-muted underline">Schließen</button>
+                      </div>
                     )}
                   </>
                 )}

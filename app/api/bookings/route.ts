@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { canBookCourse } from "@/lib/eligibility";
 
 // POST /api/bookings
 // body: { courseSessionId: string, name: string, email: string }
 // Legt Kund:in an (falls neu) und bucht sie direkt für den Termin,
-// sofern noch Platz frei ist. Keine Zahlung, keine Bestätigungs-Mail (noch).
+// sofern noch Platz frei ist, sie/er dafür berechtigt ist. Keine Zahlung,
+// keine Bestätigungs-Mail (noch).
 export async function POST(req: Request) {
   const db = supabaseAdmin();
   const { courseSessionId, name, email } = await req.json();
@@ -15,7 +17,7 @@ export async function POST(req: Request) {
 
   const { data: session, error: sessionErr } = await db
     .from("course_sessions")
-    .select("id, cancelled, capacity_override, course:courses(name, capacity)")
+    .select("id, session_date, cancelled, capacity_override, course:courses(id, name, category, capacity)")
     .eq("id", courseSessionId)
     .single();
 
@@ -66,6 +68,17 @@ export async function POST(req: Request) {
 
   if (dup) {
     return NextResponse.json({ error: "Du bist für diesen Termin bereits angemeldet." }, { status: 409 });
+  }
+
+  const eligibility = await canBookCourse(
+    db,
+    customerId,
+    (session.course as any)?.id,
+    (session.course as any)?.category,
+    session.session_date
+  );
+  if (!eligibility.allowed) {
+    return NextResponse.json({ error: eligibility.reason }, { status: 403 });
   }
 
   const { data: booking, error: bookingErr } = await db

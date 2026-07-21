@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-
-function checkPassword(password: string | null) {
-  return !!password && password === process.env.ADMIN_PASSWORD;
-}
+import { checkAdminPassword as checkPassword } from "@/lib/adminAuth";
+import { ensureEnrollmentBookings } from "@/lib/enrollments";
 
 // GET /api/admin/courses?password=...
 // Liefert ALLE Kurse (auch inaktive), zum Bearbeiten in der Admin-Oberfläche.
@@ -58,6 +56,7 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   await generateSessionsForCourse(db, course.id, weekday, 28);
+  await ensureEnrollmentBookings(db, course.id);
 
   return NextResponse.json({ id: course.id });
 }
@@ -81,6 +80,7 @@ export async function PATCH(req: Request) {
   if (regenerate && fields.weekday) {
     await generateSessionsForCourse(db, id, fields.weekday, 28);
   }
+  await ensureEnrollmentBookings(db, id);
 
   return NextResponse.json({ ok: true });
 }
