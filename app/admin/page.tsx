@@ -183,6 +183,15 @@ export default function AdminPage() {
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Zuordnen des Produkts."); return; }
     await loadSessions();
   }
+  async function saveAttendance(bookingId: string, attended: boolean | null) {
+    setActionError(null);
+    const res = await fetch("/api/admin/bookings", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, bookingId, attended }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Speichern der Anwesenheit."); return; }
+    await loadSessions();
+  }
 
   // ---- Kurse ----
   async function createCourse(e: React.FormEvent) {
@@ -519,8 +528,7 @@ export default function AdminPage() {
             <div className="flex items-center justify-center gap-3 mb-8">
               <button
                 onClick={() => setWeekStart(getMonday(addDays(weekStart, -7)))}
-                disabled={isCurrentWeek}
-                className="p-2 rounded-full border border-border text-muted disabled:opacity-30 disabled:cursor-not-allowed hover:text-gold"
+                className="p-2 rounded-full border border-border text-muted hover:text-gold"
                 aria-label="Vorherige Woche"
               >
                 <ChevronLeft size={16} />
@@ -628,6 +636,7 @@ export default function AdminPage() {
                     <span className={`text-xs ${selectedSession.participants.length > selectedSession.capacity ? "text-red-500 font-bold" : "text-muted"}`}>
                       {selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {selectedSession.participants.length}/{selectedSession.capacity}
                       {selectedSession.participants.length > selectedSession.capacity ? " ÜBERBUCHT" : ""}
+                      {" · "}{selectedSession.participants.filter((p: any) => p.attended !== null && p.attended !== undefined).length}/{selectedSession.participants.length} erfasst
                     </span>
                     <button onClick={() => toggleCancelled(selectedSession.id, !selectedSession.cancelled)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">
                       {selectedSession.cancelled ? "Wieder aktivieren" : "Termin absagen"}
@@ -641,6 +650,20 @@ export default function AdminPage() {
                   <ul className="mt-3 text-sm text-ivory space-y-2">
                     {selectedSession.participants.map((p: any, i: number) => (
                       <li key={i} className="flex items-center gap-1.5 flex-wrap">
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => saveAttendance(p.bookingId, p.attended === true ? null : true)}
+                            className={`text-xs px-2 py-1 rounded-lg border ${p.attended === true ? "bg-green-600/20 border-green-500 text-green-400" : "border-border text-muted"}`}
+                          >
+                            ✓ Da
+                          </button>
+                          <button
+                            onClick={() => saveAttendance(p.bookingId, p.attended === false ? null : false)}
+                            className={`text-xs px-2 py-1 rounded-lg border ${p.attended === false ? "bg-red-600/20 border-red-500 text-red-400" : "border-border text-muted"}`}
+                          >
+                            ✗ Fehlt
+                          </button>
+                        </div>
                         {p.name} <span className="text-muted">— {p.email}</span>
                         {p.source === "enrollment" && (
                           <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
@@ -1043,6 +1066,7 @@ export default function AdminPage() {
       )}
 
       {tab === "meldungen" && (() => {
+        const todayStr = formatDateOnly(today);
         const alerts: { severity: "rot" | "gelb"; type: string; message: string; key: string }[] = [];
         sessions.forEach((s) => {
           if (s.participants.length > s.capacity) {
@@ -1050,6 +1074,13 @@ export default function AdminPage() {
               severity: "rot", type: "Überbuchung",
               message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): ${s.participants.length}/${s.capacity} Plätze belegt`,
               key: `ob-${s.id}`,
+            });
+          }
+          if (!s.cancelled && s.date < todayStr && s.participants.some((p: any) => p.attended === null || p.attended === undefined)) {
+            alerts.push({
+              severity: "gelb", type: "Anwesenheit fehlt",
+              message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): Anwesenheit noch nicht vollständig erfasst`,
+              key: `att-${s.id}`,
             });
           }
           s.participants.forEach((p: any, i: number) => {

@@ -3,9 +3,11 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { checkAdminPassword } from "@/lib/adminAuth";
 
 // GET /api/admin/bookings?password=...
-// Liefert künftige Termine inkl. Teilnehmer:innen: ob ein aktives, passendes
-// Produkt vorliegt (nur Hinweis), welche aktiven Produkte zur Auswahl stehen,
-// ob die Buchung aus einer festen Zuteilung stammt, und den Raum des Kurses.
+// Liefert Termine der letzten 60 Tage bis unbegrenzt in die Zukunft (damit
+// auch die Anwesenheit vergangener Termine noch nachgetragen werden kann),
+// inkl. Teilnehmer:innen: ob ein aktives, passendes Produkt vorliegt (nur
+// Hinweis), welche aktiven Produkte zur Auswahl stehen, ob die Buchung aus
+// einer festen Zuteilung stammt, Raum des Kurses und Anwesenheitsstatus.
 export async function GET(req: Request) {
   const url = new URL(req.url);
   if (!checkAdminPassword(url.searchParams.get("password"))) {
@@ -13,15 +15,17 @@ export async function GET(req: Request) {
   }
 
   const db = supabaseAdmin();
+  const from = new Date();
+  from.setDate(from.getDate() - 60);
 
   const { data: sessions, error } = await db
     .from("course_sessions")
     .select(
       `id, session_date, cancelled, capacity_override,
        course:courses ( name, level, category, room, start_time, capacity ),
-       bookings ( id, status, notes, source, customer_product_id, customer:customers ( id, name, email ) )`
+       bookings ( id, status, notes, source, customer_product_id, attended, customer:customers ( id, name, email ) )`
     )
-    .gte("session_date", new Date().toISOString().slice(0, 10))
+    .gte("session_date", from.toISOString().slice(0, 10))
     .order("session_date", { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -75,6 +79,7 @@ export async function GET(req: Request) {
         notes: b.notes ?? "",
         source: b.source ?? "self",
         customerProductId: b.customer_product_id,
+        attended: b.attended,
         availableProducts: b.customer?.id ? productsFor(b.customer.id) : [],
         hasActiveProduct: b.customer?.id
           ? hasActiveProduct(b.customer.id, s.course?.category, s.session_date)
@@ -86,18 +91,19 @@ export async function GET(req: Request) {
 }
 
 // PATCH /api/admin/bookings
-// body: { password, bookingId, notes?, customerProductId? }
+// body: { password, bookingId, notes?, customerProductId?, attended? }
 export async function PATCH(req: Request) {
   const body = await req.json();
   if (!checkAdminPassword(body.password)) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
-  const { bookingId, notes, customerProductId } = body;
+  const { bookingId, notes, customerProductId, attended } = body;
   if (!bookingId) return NextResponse.json({ error: "Buchungs-ID fehlt." }, { status: 400 });
 
   const fields: Record<string, unknown> = {};
   if (notes !== undefined) fields.notes = notes || null;
   if (customerProductId !== undefined) fields.customer_product_id = customerProductId || null;
+  if (attended !== undefined) fields.attended = attended;
 
   const db = supabaseAdmin();
   const { error } = await db.from("bookings").update(fields).eq("id", bookingId);

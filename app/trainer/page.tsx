@@ -79,6 +79,13 @@ export default function TrainerPage() {
     const data = await res.json();
     if (res.ok) setSessions(data.sessions ?? []);
   }
+  async function saveAttendance(bookingId: string, attended: boolean | null) {
+    const res = await fetch("/api/trainer/bookings", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bookingId, attended }),
+    });
+    if (res.ok) await loadSessions();
+  }
 
   async function logout() {
     await fetch("/api/trainer/logout", { method: "POST" });
@@ -132,8 +139,7 @@ export default function TrainerPage() {
       <div className="flex items-center justify-center gap-3 mb-8">
         <button
           onClick={() => setWeekStart(getMonday(addDays(weekStart, -7)))}
-          disabled={isCurrentWeek}
-          className="p-2 rounded-full border border-border text-muted disabled:opacity-30 disabled:cursor-not-allowed hover:text-gold"
+          className="p-2 rounded-full border border-border text-muted hover:text-gold"
         >
           <ChevronLeft size={16} />
         </button>
@@ -220,7 +226,10 @@ export default function TrainerPage() {
               {selectedSession.courseName} {selectedSession.level ? `– ${selectedSession.level}` : ""} {selectedSession.room ? <span className="text-xs text-muted">· {selectedSession.room}</span> : null}
               {selectedSession.cancelled && <span className="ml-2 text-xs text-wine">(abgesagt)</span>}
             </h3>
-            <span className="text-xs text-muted">{selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {selectedSession.participants.length}/{selectedSession.capacity}</span>
+            <span className="text-xs text-muted">
+              {selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {selectedSession.participants.length}/{selectedSession.capacity}
+              {" · "}{selectedSession.participants.filter((p: any) => p.attended !== null && p.attended !== undefined).length}/{selectedSession.participants.length} erfasst
+            </span>
           </div>
           {selectedSession.participants.length === 0 ? (
             <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
@@ -228,6 +237,20 @@ export default function TrainerPage() {
             <ul className="mt-3 text-sm text-ivory space-y-1.5">
               {selectedSession.participants.map((p: any, i: number) => (
                 <li key={i} className="flex items-center gap-1.5 flex-wrap">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => saveAttendance(p.bookingId, p.attended === true ? null : true)}
+                      className={`text-xs px-2 py-1 rounded-lg border ${p.attended === true ? "bg-green-600/20 border-green-500 text-green-400" : "border-border text-muted"}`}
+                    >
+                      ✓ Da
+                    </button>
+                    <button
+                      onClick={() => saveAttendance(p.bookingId, p.attended === false ? null : false)}
+                      className={`text-xs px-2 py-1 rounded-lg border ${p.attended === false ? "bg-red-600/20 border-red-500 text-red-400" : "border-border text-muted"}`}
+                    >
+                      ✗ Fehlt
+                    </button>
+                  </div>
                   {p.name} <span className="text-muted">— {p.email}</span>
                   {p.source === "enrollment" && <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>}
                   {p.notes && <span className="text-xs text-muted">· {p.notes}</span>}

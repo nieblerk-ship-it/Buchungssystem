@@ -204,7 +204,29 @@ Neu:
   E-Mails, Kommentare, "Fest zugeteilt"-Badges), ohne Bearbeitungsmöglichkeiten.
   Das ändert sich mit der Anwesenheits-Checkliste in Phase 4.
 
+## Phase 4 – Anwesenheits-Checkliste (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_07_attendance.sql`
+
+- Bei jeder Buchung im Reiter **Anmeldungen** (Admin) und im **Trainer-Bereich**
+  gibt es jetzt zwei Buttons **"✓ Da"** / **"✗ Fehlt"** pro Person — Klick
+  speichert sofort. Nochmal klicken setzt zurück auf "nicht erfasst".
+- Trainer:innen können das jetzt auch für ihre eigenen Kurse eintragen (vorher
+  nur Ansicht) — eine serverseitige Prüfung stellt sicher, dass sie nur bei
+  ihren eigenen Kursen etwas ändern können.
+- Admin und Trainer-Bereich können jetzt auch **in vergangene Wochen navigieren**
+  (bis 60 Tage zurück), damit sich Anwesenheit auch nachträglich eintragen lässt.
+  Auf der öffentlichen Buchungsseite bleibt das wie gehabt gesperrt.
+- Neue Meldung im Reiter **Meldungen**: "Anwesenheit fehlt" (gelb) für
+  vergangene, nicht abgesagte Termine mit mindestens einer noch nicht
+  erfassten Person.
+
+Absichtlich (noch) nicht enthalten: die separate Zahlungsbestätigung pro
+Kartentyp (Drop-in/USC-Zuzahlung) aus der ursprünglichen Anforderung — dafür
+gibt es weiterhin das freie Kommentarfeld pro Buchung.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
+
 
 
 
