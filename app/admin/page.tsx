@@ -33,6 +33,15 @@ function euro(cents: number) {
   return (cents / 100).toFixed(2) + "€";
 }
 
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-[11px] text-muted mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
 // ---- Datumshilfen für die Wochenansicht (wie auf der Buchungsseite) ----
 function formatDateOnly(d: Date): string {
   const y = d.getFullYear();
@@ -101,6 +110,14 @@ export default function AdminPage() {
   const [accessPanelFor, setAccessPanelFor] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<any[]>([]);
   const [overrideForm, setOverrideForm] = useState<any>({ courseId: "", access: "allow", notes: "" });
+
+  const [historyForCustomerId, setHistoryForCustomerId] = useState<string | null>(null);
+  const [historyBookings, setHistoryBookings] = useState<any[]>([]);
+  const [expandedProducts, setExpandedProducts] = useState<string[]>([]);
+  const [renewingId, setRenewingId] = useState<string | null>(null);
+  const [renewDate, setRenewDate] = useState("");
+  const [reactivatingId, setReactivatingId] = useState<string | null>(null);
+  const [reactivateDate, setReactivateDate] = useState("");
 
   const [enrollPanelFor, setEnrollPanelFor] = useState<string | null>(null);
   const [enrollments, setEnrollments] = useState<any[]>([]);
@@ -290,15 +307,57 @@ export default function AdminPage() {
     setAssigningFor(null);
     await loadCustomers();
   }
-  async function extendProduct(cpId: string, currentUntil: string | null) {
-    const input = prompt("Neues Ablaufdatum (JJJJ-MM-TT):", currentUntil ?? new Date().toISOString().slice(0, 10));
-    if (!input) return;
-    setActionError(null);
+  async function loadHistory(customerId: string) {
+    const res = await fetch(`/api/admin/customer-history?password=${encodeURIComponent(password)}&customerId=${customerId}`);
+    const data = await res.json();
+    if (res.ok) {
+      setHistoryBookings(data.bookings);
+      setHistoryForCustomerId(customerId);
+    }
+  }
+  function toggleDetails(customerId: string) {
+    if (historyForCustomerId === customerId) {
+      setHistoryForCustomerId(null);
+    } else {
+      loadHistory(customerId);
+    }
+  }
+  function toggleProductExpand(cpId: string, customerId: string) {
+    setExpandedProducts((prev) => (prev.includes(cpId) ? prev.filter((id) => id !== cpId) : [...prev, cpId]));
+    if (historyForCustomerId !== customerId) loadHistory(customerId);
+  }
+  function startRenew(cp: any) {
+    setRenewingId(cp.id);
+    setRenewDate(cp.valid_until ?? new Date().toISOString().slice(0, 10));
+  }
+  async function submitRenew(cp: any) {
+    if (cp.valid_until && renewDate && renewDate < cp.valid_until) {
+      if (!confirm(`Das verkürzt die Gültigkeit von ${cp.valid_until} auf ${renewDate}. Bist du sicher?`)) return;
+    }
+    setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customer-products", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: cpId, valid_until: input }),
+      body: JSON.stringify({ password, id: cp.id, valid_until: renewDate || null }),
     });
+    setSaving(false);
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    setRenewingId(null);
+    await loadCustomers();
+  }
+  function startReactivate(cp: any) {
+    setReactivatingId(cp.id);
+    setReactivateDate(new Date().toISOString().slice(0, 10));
+  }
+  async function submitReactivate(cp: any) {
+    if (!reactivateDate) return;
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/customer-products", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, id: cp.id, active: true, valid_until: reactivateDate }),
+    });
+    setSaving(false);
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    setReactivatingId(null);
     await loadCustomers();
   }
   async function removeCustomerProduct(cpId: string) {
@@ -704,27 +763,35 @@ export default function AdminPage() {
           <form onSubmit={createCourse} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
             <h3 className="font-display text-lg text-ivory mb-2">Neuen Kurs anlegen</h3>
             <div className="grid sm:grid-cols-2 gap-3">
-              <input required placeholder="Name (z.B. Beginner 1)" value={newCourse.name} onChange={(e) => setNewCourse({ ...newCourse, name: e.target.value })} className={inputClass} />
-              <input placeholder="Level (optional)" value={newCourse.level} onChange={(e) => setNewCourse({ ...newCourse, level: e.target.value })} className={inputClass} />
-              <select required value={newCourse.category} onChange={(e) => setNewCourse({ ...newCourse, category: e.target.value })} className={inputClass}>
-                {COURSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <input placeholder="Trainer:in (optional)" value={newCourse.instructor} onChange={(e) => setNewCourse({ ...newCourse, instructor: e.target.value })} className={inputClass} />
-              <select value={newCourse.room} onChange={(e) => setNewCourse({ ...newCourse, room: e.target.value })} className={inputClass}>
-                {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-              <select value={newCourse.trainer_id} onChange={(e) => setNewCourse({ ...newCourse, trainer_id: e.target.value })} className={inputClass}>
-                <option value="">Trainer-Konto: keins</option>
-                {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>Konto: {t.name}</option>)}
-              </select>
-              <select value={newCourse.weekday} onChange={(e) => setNewCourse({ ...newCourse, weekday: Number(e.target.value) })} className={inputClass}>
-                {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
-              </select>
-              <input required type="time" value={newCourse.start_time} onChange={(e) => setNewCourse({ ...newCourse, start_time: e.target.value })} className={inputClass} />
-              <input type="number" placeholder="Dauer (Minuten)" value={newCourse.duration_minutes} onChange={(e) => setNewCourse({ ...newCourse, duration_minutes: Number(e.target.value) })} className={inputClass} />
-              <input required type="number" placeholder="Kapazität" value={newCourse.capacity} onChange={(e) => setNewCourse({ ...newCourse, capacity: Number(e.target.value) })} className={inputClass} />
+              <Field label="Kursname"><input required placeholder="z.B. Beginner 1" value={newCourse.name} onChange={(e) => setNewCourse({ ...newCourse, name: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Level (optional)"><input placeholder="z.B. Level 1" value={newCourse.level} onChange={(e) => setNewCourse({ ...newCourse, level: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Kategorie">
+                <select required value={newCourse.category} onChange={(e) => setNewCourse({ ...newCourse, category: e.target.value })} className={`w-full ${inputClass}`}>
+                  {COURSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </Field>
+              <Field label="Trainer:in-Anzeigename (optional, Freitext)"><input placeholder="z.B. Nina" value={newCourse.instructor} onChange={(e) => setNewCourse({ ...newCourse, instructor: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Raum">
+                <select value={newCourse.room} onChange={(e) => setNewCourse({ ...newCourse, room: e.target.value })} className={`w-full ${inputClass}`}>
+                  {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </Field>
+              <Field label="Trainer-Konto (für Login-Zugriff, optional)">
+                <select value={newCourse.trainer_id} onChange={(e) => setNewCourse({ ...newCourse, trainer_id: e.target.value })} className={`w-full ${inputClass}`}>
+                  <option value="">Trainer-Konto: keins</option>
+                  {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>Konto: {t.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Wochentag">
+                <select value={newCourse.weekday} onChange={(e) => setNewCourse({ ...newCourse, weekday: Number(e.target.value) })} className={`w-full ${inputClass}`}>
+                  {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                </select>
+              </Field>
+              <Field label="Startzeit (Std:Min)"><input required type="time" value={newCourse.start_time} onChange={(e) => setNewCourse({ ...newCourse, start_time: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Dauer (Minuten)"><input type="number" placeholder="z.B. 70" value={newCourse.duration_minutes} onChange={(e) => setNewCourse({ ...newCourse, duration_minutes: Number(e.target.value) })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Kapazität (Anzahl Plätze)"><input required type="number" placeholder="z.B. 8" value={newCourse.capacity} onChange={(e) => setNewCourse({ ...newCourse, capacity: Number(e.target.value) })} className={`w-full ${inputClass}`} /></Field>
             </div>
-            <textarea placeholder="Notizen (optional)" value={newCourse.notes} onChange={(e) => setNewCourse({ ...newCourse, notes: e.target.value })} className={`w-full ${inputClass}`} />
+            <Field label="Notizen (optional)"><textarea placeholder="z.B. Hinweise für Trainerinnen" value={newCourse.notes} onChange={(e) => setNewCourse({ ...newCourse, notes: e.target.value })} className={`w-full ${inputClass}`} /></Field>
             <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
               {saving ? "Speichere…" : "Kurs anlegen"}
             </button>
@@ -790,12 +857,12 @@ export default function AdminPage() {
           <form onSubmit={createCustomer} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
             <h3 className="font-display text-lg text-ivory mb-2">Neue:n Schüler:in anlegen</h3>
             <div className="grid sm:grid-cols-2 gap-3">
-              <input required placeholder="Name" value={newCustomer.name} onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })} className={inputClass} />
-              <input required type="email" placeholder="E-Mail" value={newCustomer.email} onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })} className={inputClass} />
-              <input placeholder="Telefon (optional)" value={newCustomer.phone} onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })} className={inputClass} />
-              <input placeholder="Level (optional)" value={newCustomer.level} onChange={(e) => setNewCustomer({ ...newCustomer, level: e.target.value })} className={inputClass} />
+              <Field label="Vollständiger Name"><input required placeholder="Vorname Nachname" value={newCustomer.name} onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="E-Mail-Adresse"><input required type="email" placeholder="name@beispiel.de" value={newCustomer.email} onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Telefonnummer (optional)"><input placeholder="z.B. 0170 1234567" value={newCustomer.phone} onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Level (optional)"><input placeholder="z.B. Level 2" value={newCustomer.level} onChange={(e) => setNewCustomer({ ...newCustomer, level: e.target.value })} className={`w-full ${inputClass}`} /></Field>
             </div>
-            <textarea placeholder="Notizen (optional)" value={newCustomer.notes} onChange={(e) => setNewCustomer({ ...newCustomer, notes: e.target.value })} className={`w-full ${inputClass}`} />
+            <Field label="Notizen (optional)"><textarea placeholder="interne Notizen" value={newCustomer.notes} onChange={(e) => setNewCustomer({ ...newCustomer, notes: e.target.value })} className={`w-full ${inputClass}`} /></Field>
             <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">{saving ? "Speichere…" : "Anlegen"}</button>
           </form>
 
@@ -828,6 +895,9 @@ export default function AdminPage() {
                         <button onClick={() => startAssign(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Produkt zuweisen</button>
                         <button onClick={() => openAccessPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Freigaben</button>
                         <button onClick={() => openEnrollPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Feste Zuteilung</button>
+                        <button onClick={() => toggleDetails(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">
+                          {historyForCustomerId === c.id ? "Details schließen" : "Details"}
+                        </button>
                         <button onClick={() => startEditCustomer(c)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">Bearbeiten</button>
                         <button onClick={() => deleteCustomer(c.id, c.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Entfernen</button>
                       </div>
@@ -835,18 +905,107 @@ export default function AdminPage() {
 
                     {c.customer_products?.length > 0 && (
                       <ul className="mt-3 space-y-1.5">
-                        {c.customer_products.filter((cp: any) => cp.active).map((cp: any) => (
-                          <li key={cp.id} className="text-xs text-ivory flex items-center gap-2 flex-wrap">
-                            <span className="px-2 py-0.5 rounded-full bg-bg border border-border">{cp.product?.name}{cp.is_reduced ? " (ermäßigt)" : ""}</span>
-                            <span className="text-muted">
-                              {cp.valid_from} – {cp.valid_until ?? "unbegrenzt"}
-                              {cp.credits_total ? ` · ${cp.credits_remaining ?? cp.credits_total}/${cp.credits_total} Guthaben` : ""}
-                            </span>
-                            <button onClick={() => extendProduct(cp.id, cp.valid_until)} className="text-gold underline">verlängern</button>
-                            <button onClick={() => removeCustomerProduct(cp.id)} className="text-wine underline">entfernen</button>
-                          </li>
-                        ))}
+                        {c.customer_products.filter((cp: any) => cp.active).map((cp: any) => {
+                          const usage = historyBookings.filter((b) => b.customerProductId === cp.id);
+                          const expanded = expandedProducts.includes(cp.id);
+                          return (
+                            <li key={cp.id} className="text-xs text-ivory">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-full bg-bg border border-border">{cp.product?.name}{cp.is_reduced ? " (ermäßigt)" : ""}</span>
+                                <span className="text-muted">
+                                  {cp.valid_from} – {cp.valid_until ?? "unbegrenzt"}
+                                  {cp.credits_total ? ` · ${cp.credits_remaining ?? cp.credits_total}/${cp.credits_total} Guthaben` : ""}
+                                </span>
+                                <button onClick={() => startRenew(cp)} className="text-gold underline">verlängern</button>
+                                <button onClick={() => removeCustomerProduct(cp.id)} className="text-wine underline">entfernen</button>
+                                <button onClick={() => toggleProductExpand(cp.id, c.id)} className="text-muted underline ml-auto">
+                                  {expanded ? "▲ Verlauf" : "▼ Verlauf"}
+                                </button>
+                              </div>
+
+                              {renewingId === cp.id && (
+                                <div className="mt-2 p-2 rounded-lg bg-bg border border-border flex items-center gap-2 flex-wrap">
+                                  <div>
+                                    <label className="block text-[10px] text-muted mb-0.5">Neues Ablaufdatum</label>
+                                    <input type="date" value={renewDate} onChange={(e) => setRenewDate(e.target.value)} className={inputClass} />
+                                  </div>
+                                  <button onClick={() => submitRenew(cp)} disabled={saving} className="px-3 py-2 rounded-full text-xs font-medium bg-gold text-bg disabled:opacity-60">Speichern</button>
+                                  <button onClick={() => setRenewingId(null)} className="px-3 py-2 rounded-full text-xs border border-border text-muted">Abbrechen</button>
+                                </div>
+                              )}
+
+                              {expanded && (
+                                <div className="mt-2 pl-3 border-l border-border">
+                                  {usage.length === 0 ? (
+                                    <p className="text-muted">Noch keine Termine mit diesem Guthaben verknüpft.</p>
+                                  ) : (
+                                    <ul className="space-y-1">
+                                      {usage.map((b) => (
+                                        <li key={b.id} className="text-muted">
+                                          {b.courseName} am {b.date}{b.attended === true ? " · anwesend" : b.attended === false ? " · gefehlt" : ""}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
+                    )}
+
+                    {historyForCustomerId === c.id && (
+                      <div className="mt-4 p-4 rounded-xl bg-bg border border-border space-y-4">
+                        <div>
+                          <h5 className="text-sm text-ivory font-medium mb-2">Inaktive / abgelaufene Produkte</h5>
+                          {c.customer_products?.filter((cp: any) => !cp.active).length > 0 ? (
+                            <ul className="space-y-2">
+                              {c.customer_products.filter((cp: any) => !cp.active).map((cp: any) => (
+                                <li key={cp.id} className="text-xs">
+                                  <div className="flex items-center gap-2 flex-wrap text-muted">
+                                    <span className="px-2 py-0.5 rounded-full bg-surface border border-border text-ivory">{cp.product?.name}</span>
+                                    <span>{cp.valid_from} – {cp.valid_until ?? "unbegrenzt"}</span>
+                                    <button onClick={() => startReactivate(cp)} className="text-gold underline">reaktivieren</button>
+                                  </div>
+                                  {reactivatingId === cp.id && (
+                                    <div className="mt-2 p-2 rounded-lg bg-surface border border-border flex items-center gap-2 flex-wrap">
+                                      <div>
+                                        <label className="block text-[10px] text-muted mb-0.5">Neues Ablaufdatum</label>
+                                        <input type="date" value={reactivateDate} onChange={(e) => setReactivateDate(e.target.value)} className={inputClass} />
+                                      </div>
+                                      <button onClick={() => submitReactivate(cp)} disabled={saving} className="px-3 py-2 rounded-full text-xs font-medium bg-gold text-bg disabled:opacity-60">Reaktivieren</button>
+                                      <button onClick={() => setReactivatingId(null)} className="px-3 py-2 rounded-full text-xs border border-border text-muted">Abbrechen</button>
+                                    </div>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-xs text-muted">Keine inaktiven Produkte.</p>
+                          )}
+                        </div>
+                        <div>
+                          <h5 className="text-sm text-ivory font-medium mb-2">Buchungshistorie</h5>
+                          {historyBookings.length === 0 ? (
+                            <p className="text-xs text-muted">Noch keine Buchungen.</p>
+                          ) : (
+                            <ul className="space-y-1 max-h-64 overflow-y-auto">
+                              {historyBookings.map((b) => (
+                                <li key={b.id} className="text-xs text-muted flex items-center gap-2 flex-wrap">
+                                  <span className="text-ivory">{b.courseName}</span>
+                                  <span>{b.date} · {b.time?.slice(0, 5)}</span>
+                                  {b.status === "cancelled" && <span className="text-wine">storniert</span>}
+                                  {b.source === "enrollment" && <span className="text-gold">Fest zugeteilt</span>}
+                                  {b.attended === true && <span className="text-green-400">anwesend</span>}
+                                  {b.attended === false && <span className="text-red-400">gefehlt</span>}
+                                  {b.notes && <span>· {b.notes}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      </div>
                     )}
 
                     {assigningFor === c.id && (
@@ -944,12 +1103,12 @@ export default function AdminPage() {
           <form onSubmit={createProduct} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
             <h3 className="font-display text-lg text-ivory mb-2">Neues Produkt anlegen</h3>
             <div className="grid sm:grid-cols-2 gap-3">
-              <input required placeholder="Name (z.B. 10er Karte)" value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} className={inputClass} />
-              <input required placeholder="Kategorie (z.B. Poledance, Kursabo)" value={newProduct.category} onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })} className={inputClass} />
-              <input required type="number" step="0.01" placeholder="Preis in €" value={newProduct.price_cents} onChange={(e) => setNewProduct({ ...newProduct, price_cents: e.target.value })} className={inputClass} />
-              <input type="number" step="0.01" placeholder="Ermäßigter Preis in € (optional)" value={newProduct.reduced_price_cents} onChange={(e) => setNewProduct({ ...newProduct, reduced_price_cents: e.target.value })} className={inputClass} />
-              <input type="number" placeholder="Guthaben (leer = unbegrenzt)" value={newProduct.credits} onChange={(e) => setNewProduct({ ...newProduct, credits: e.target.value })} className={inputClass} />
-              <input type="number" placeholder="Gültigkeit in Tagen (leer = unbegrenzt)" value={newProduct.valid_days} onChange={(e) => setNewProduct({ ...newProduct, valid_days: e.target.value })} className={inputClass} />
+              <Field label="Produktname"><input required placeholder="z.B. 10er Karte" value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Kategorie"><input required placeholder="z.B. Poledance, Kursabo" value={newProduct.category} onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Preis (in Euro)"><input required type="number" step="0.01" placeholder="z.B. 220.00" value={newProduct.price_cents} onChange={(e) => setNewProduct({ ...newProduct, price_cents: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Ermäßigter Preis in Euro (optional)"><input type="number" step="0.01" placeholder="z.B. 190.00" value={newProduct.reduced_price_cents} onChange={(e) => setNewProduct({ ...newProduct, reduced_price_cents: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Guthaben in Einheiten (leer = unbegrenzt)"><input type="number" placeholder="z.B. 10" value={newProduct.credits} onChange={(e) => setNewProduct({ ...newProduct, credits: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Gültigkeit in Tagen (leer = unbegrenzt)"><input type="number" placeholder="z.B. 182" value={newProduct.valid_days} onChange={(e) => setNewProduct({ ...newProduct, valid_days: e.target.value })} className={`w-full ${inputClass}`} /></Field>
             </div>
             <div>
               <p className="text-xs text-muted mb-2">Buchbar für Kurs-Kategorien (keine Auswahl = alle):</p>
@@ -1028,9 +1187,9 @@ export default function AdminPage() {
           <form onSubmit={createTrainer} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
             <h3 className="font-display text-lg text-ivory mb-2">Neues Trainer-Konto anlegen</h3>
             <div className="grid sm:grid-cols-2 gap-3">
-              <input required placeholder="Name" value={newTrainer.name} onChange={(e) => setNewTrainer({ ...newTrainer, name: e.target.value })} className={inputClass} />
-              <input required type="email" placeholder="E-Mail (Login)" value={newTrainer.email} onChange={(e) => setNewTrainer({ ...newTrainer, email: e.target.value })} className={inputClass} />
-              <input required type="text" placeholder="Passwort (mind. 6 Zeichen)" value={newTrainer.newPassword} onChange={(e) => setNewTrainer({ ...newTrainer, newPassword: e.target.value })} className={inputClass} />
+              <Field label="Vollständiger Name"><input required placeholder="Vorname Nachname" value={newTrainer.name} onChange={(e) => setNewTrainer({ ...newTrainer, name: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="E-Mail-Adresse (dient als Login)"><input required type="email" placeholder="name@beispiel.de" value={newTrainer.email} onChange={(e) => setNewTrainer({ ...newTrainer, email: e.target.value })} className={`w-full ${inputClass}`} /></Field>
+              <Field label="Passwort (mind. 6 Zeichen)"><input required type="text" placeholder="z.B. TempPasswort123" value={newTrainer.newPassword} onChange={(e) => setNewTrainer({ ...newTrainer, newPassword: e.target.value })} className={`w-full ${inputClass}`} /></Field>
             </div>
             <p className="text-xs text-muted">Gib der Trainerin E-Mail und Passwort weiter, damit sie sich unter /trainer einloggen kann.</p>
             <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">{saving ? "Speichere…" : "Konto anlegen"}</button>
