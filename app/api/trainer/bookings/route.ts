@@ -26,7 +26,7 @@ export async function GET() {
     .select(
       `id, session_date, cancelled, capacity_override,
        course:courses ( id, name, level, category, room, start_time, capacity ),
-       bookings ( id, status, notes, source, attended, customer:customers ( name, email ) )`
+       bookings ( id, status, notes, source, attended, deleted_customer_name, deleted_customer_email, customer:customers ( name, email ) )`
     )
     .in("course_id", courseIds)
     .gte("session_date", from.toISOString().slice(0, 10))
@@ -45,7 +45,7 @@ export async function GET() {
     capacity: s.capacity_override ?? s.course?.capacity,
     participants: (s.bookings ?? [])
       .filter((b: any) => b.status === "confirmed")
-      .map((b: any) => ({ bookingId: b.id, name: b.customer?.name, email: b.customer?.email, notes: b.notes ?? "", source: b.source ?? "self", attended: b.attended })),
+      .map((b: any) => ({ bookingId: b.id, name: b.customer?.name ?? b.deleted_customer_name ?? "Unbekannt", email: b.customer?.email ?? b.deleted_customer_email ?? "", notes: b.notes ?? "", source: b.source ?? "self", attended: b.attended })),
   }));
 
   return NextResponse.json({ sessions: result });

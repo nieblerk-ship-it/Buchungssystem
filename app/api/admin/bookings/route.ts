@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     .select(
       `id, session_date, cancelled, capacity_override,
        course:courses ( name, level, category, room, start_time, capacity ),
-       bookings ( id, status, notes, source, customer_product_id, attended, customer:customers ( id, name, email ) )`
+       bookings ( id, status, notes, source, customer_product_id, attended, deleted_customer_name, deleted_customer_email, customer:customers ( id, name, email ) )`
     )
     .gte("session_date", from.toISOString().slice(0, 10))
     .order("session_date", { ascending: true });
@@ -74,8 +74,9 @@ export async function GET(req: Request) {
       .filter((b: any) => b.status === "confirmed")
       .map((b: any) => ({
         bookingId: b.id,
-        name: b.customer?.name,
-        email: b.customer?.email,
+        name: b.customer?.name ?? b.deleted_customer_name ?? "Unbekannt",
+        email: b.customer?.email ?? b.deleted_customer_email ?? "",
+        accountDeleted: !b.customer,
         notes: b.notes ?? "",
         source: b.source ?? "self",
         customerProductId: b.customer_product_id,

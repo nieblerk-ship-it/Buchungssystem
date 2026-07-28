@@ -17,9 +17,21 @@ export async function GET(req: Request) {
   const db = supabaseAdmin();
 
   if (showArchived) {
-    // Automatische Bereinigung: alles löschen, was länger als 90 Tage archiviert ist
+    // Automatische Bereinigung: alles endgültig löschen, was länger als 90 Tage
+    // archiviert ist. Vorher Name/E-Mail in die Buchungen übernehmen, damit
+    // vergangene Buchungen als Nachweis erhalten bleiben.
     const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
-    await db.from("customers").delete().not("archived_at", "is", null).lt("archived_at", cutoff);
+    const { data: expired } = await db
+      .from("customers")
+      .select("id, name, email")
+      .not("archived_at", "is", null)
+      .lt("archived_at", cutoff);
+    for (const c of expired ?? []) {
+      await db.from("bookings").update({ deleted_customer_name: c.name, deleted_customer_email: c.email }).eq("customer_id", c.id);
+    }
+    if (expired && expired.length > 0) {
+      await db.from("customers").delete().in("id", expired.map((c) => c.id));
+    }
   }
 
   let query = db
@@ -108,11 +120,15 @@ export async function DELETE(req: Request) {
   if (!id) return NextResponse.json({ error: "Schüler-ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
-  const { data: customer } = await db.from("customers").select("archived_at").eq("id", id).maybeSingle();
+  const { data: customer } = await db.from("customers").select("name, email, archived_at").eq("id", id).maybeSingle();
   if (!customer) return NextResponse.json({ error: "Schüler:in nicht gefunden." }, { status: 404 });
   if (!customer.archived_at) {
     return NextResponse.json({ error: "Bitte zuerst archivieren — endgültiges Löschen ist nur aus dem Archiv möglich." }, { status: 409 });
   }
+
+  // Name/E-Mail als Nachweis in die Buchungen übernehmen, bevor das Konto
+  // gelöscht wird — die Buchungen selbst bleiben dauerhaft erhalten.
+  await db.from("bookings").update({ deleted_customer_name: customer.name, deleted_customer_email: customer.email }).eq("customer_id", id);
 
   const { error } = await db.from("customers").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

@@ -115,6 +115,7 @@ export default function AdminPage() {
   const [historyBookings, setHistoryBookings] = useState<any[]>([]);
   const [showArchive, setShowArchive] = useState(false);
   const [retentionDays, setRetentionDays] = useState(90);
+  const [archiveDialog, setArchiveDialog] = useState<{ id: string; name: string } | null>(null);
   const [expandedProducts, setExpandedProducts] = useState<string[]>([]);
   const [renewingId, setRenewingId] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
@@ -287,14 +288,19 @@ export default function AdminPage() {
     setEditingCustomerId(null);
     await loadCustomers();
   }
-  async function archiveCustomer(id: string, name: string) {
-    if (!confirm(`"${name}" ins Archiv verschieben? Die Person erscheint dann nicht mehr in der aktiven Liste und wird nach ${retentionDays} Tagen automatisch endgültig gelöscht. Bis dahin ist eine Wiederherstellung jederzeit möglich.`)) return;
-    setActionError(null);
+  function archiveCustomer(id: string, name: string) {
+    setArchiveDialog({ id, name });
+  }
+  async function submitArchive() {
+    if (!archiveDialog) return;
+    setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customers", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id, archive: true }),
+      body: JSON.stringify({ password, id: archiveDialog.id, archive: true }),
     });
+    setSaving(false);
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    setArchiveDialog(null);
     await loadCustomers();
   }
   async function restoreCustomer(id: string) {
@@ -753,10 +759,13 @@ export default function AdminPage() {
                           </button>
                         </div>
                         {p.name} <span className="text-muted">— {p.email}</span>
+                        {p.accountDeleted && (
+                          <span className="text-xs px-2 py-0.5 rounded-full border border-border text-muted">Konto gelöscht</span>
+                        )}
                         {p.source === "enrollment" && (
                           <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
                         )}
-                        {!p.hasActiveProduct && (
+                        {!p.hasActiveProduct && !p.accountDeleted && (
                           <span className="flex items-center gap-1 text-xs text-gold ml-1" title="Kein aktives, passendes Produkt hinterlegt">
                             <AlertTriangle size={12} /> kein aktives Produkt
                           </span>
@@ -1305,7 +1314,7 @@ export default function AdminPage() {
             if (p.notes) {
               alerts.push({ severity: "gelb", type: "Kommentar", message: `${p.name} – ${s.courseName} (${s.date}): "${p.notes}"`, key: `note-${s.id}-${i}` });
             }
-            if (!p.hasActiveProduct) {
+            if (!p.hasActiveProduct && !p.accountDeleted) {
               alerts.push({ severity: "gelb", type: "Kein aktives Produkt", message: `${p.name} – ${s.courseName} (${s.date})`, key: `prod-${s.id}-${i}` });
             }
           });
@@ -1336,6 +1345,32 @@ export default function AdminPage() {
           </div>
         );
       })()}
+
+      {archiveDialog && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: "#0A0910CC" }}>
+          <div className="w-full max-w-md rounded-2xl p-6 bg-surface border border-border">
+            <h3 className="font-display text-xl text-ivory mb-3">Schüler:in archivieren</h3>
+            <p className="text-sm text-muted mb-2">
+              <span className="text-ivory">{archiveDialog.name}</span> wird ins Archiv verschoben und erscheint
+              nicht mehr in der aktiven Liste. Laufende feste Zuteilungen werden beendet.
+            </p>
+            <p className="text-sm text-muted mb-2">
+              Nach <span className="text-ivory">{retentionDays} Tagen</span> wird das Konto automatisch endgültig
+              gelöscht — bis dahin ist eine Wiederherstellung jederzeit möglich.
+            </p>
+            <p className="text-sm text-muted mb-5">
+              Vergangene Buchungen bleiben auch nach der endgültigen Löschung dauerhaft als Nachweis erhalten
+              (mit Name und E-Mail).
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setArchiveDialog(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+              <button onClick={submitArchive} disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-wine text-ivory disabled:opacity-60">
+                {saving ? "Archiviere…" : "Archivieren"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
