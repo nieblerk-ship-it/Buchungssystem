@@ -42,11 +42,15 @@ export async function POST(req: Request) {
   // Kund:in finden oder anlegen
   const { data: existing } = await db
     .from("customers")
-    .select("id")
+    .select("id, archived_at")
     .eq("email", email.trim().toLowerCase())
     .maybeSingle();
 
   let customerId = existing?.id;
+  if (existing?.archived_at) {
+    // Person war archiviert, ist aber offensichtlich wieder aktiv -> wiederherstellen
+    await db.from("customers").update({ archived_at: null }).eq("id", existing.id);
+  }
   if (!customerId) {
     const { data: created, error: custErr } = await db
       .from("customers")

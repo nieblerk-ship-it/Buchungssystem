@@ -113,6 +113,8 @@ export default function AdminPage() {
 
   const [historyForCustomerId, setHistoryForCustomerId] = useState<string | null>(null);
   const [historyBookings, setHistoryBookings] = useState<any[]>([]);
+  const [showArchive, setShowArchive] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(90);
   const [expandedProducts, setExpandedProducts] = useState<string[]>([]);
   const [renewingId, setRenewingId] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
@@ -156,10 +158,18 @@ export default function AdminPage() {
     const data = await res.json();
     if (res.ok) setCourses(data.courses);
   }
-  async function loadCustomers() {
-    const res = await fetch(`/api/admin/customers?password=${encodeURIComponent(password)}`);
+  async function loadCustomers(archived?: boolean) {
+    const arch = archived ?? showArchive;
+    const res = await fetch(`/api/admin/customers?password=${encodeURIComponent(password)}${arch ? "&archived=1" : ""}`);
     const data = await res.json();
-    if (res.ok) setCustomers(data.customers);
+    if (res.ok) {
+      setCustomers(data.customers);
+      if (data.retentionDays) setRetentionDays(data.retentionDays);
+    }
+  }
+  async function switchArchiveView(archived: boolean) {
+    setShowArchive(archived);
+    await loadCustomers(archived);
   }
   async function loadProducts() {
     const res = await fetch(`/api/admin/products?password=${encodeURIComponent(password)}`);
@@ -277,8 +287,27 @@ export default function AdminPage() {
     setEditingCustomerId(null);
     await loadCustomers();
   }
-  async function deleteCustomer(id: string, name: string) {
-    if (!confirm(`Schüler:in "${name}" wirklich entfernen? Das löscht auch alle Buchungen und Produktzuweisungen unwiderruflich.`)) return;
+  async function archiveCustomer(id: string, name: string) {
+    if (!confirm(`"${name}" ins Archiv verschieben? Die Person erscheint dann nicht mehr in der aktiven Liste und wird nach ${retentionDays} Tagen automatisch endgültig gelöscht. Bis dahin ist eine Wiederherstellung jederzeit möglich.`)) return;
+    setActionError(null);
+    const res = await fetch("/api/admin/customers", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, id, archive: true }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadCustomers();
+  }
+  async function restoreCustomer(id: string) {
+    setActionError(null);
+    const res = await fetch("/api/admin/customers", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, id, restore: true }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadCustomers();
+  }
+  async function deleteCustomerForever(id: string, name: string) {
+    if (!confirm(`"${name}" JETZT endgültig löschen? Das entfernt auch alle Buchungen und Produktzuweisungen unwiderruflich und kann nicht rückgängig gemacht werden.`)) return;
     setActionError(null);
     const res = await fetch(`/api/admin/customers?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
@@ -867,7 +896,25 @@ export default function AdminPage() {
           </form>
 
           <div className="space-y-3">
-            <h3 className="font-display text-lg text-ivory">Alle Schüler:innen</h3>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="font-display text-lg text-ivory">{showArchive ? "Archiv" : "Alle Schüler:innen"}</h3>
+              <div className="flex gap-1">
+                <button onClick={() => switchArchiveView(false)}
+                  className={`px-3 py-1.5 text-xs rounded-full ${!showArchive ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+                  Aktiv
+                </button>
+                <button onClick={() => switchArchiveView(true)}
+                  className={`px-3 py-1.5 text-xs rounded-full ${showArchive ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+                  Archiv
+                </button>
+              </div>
+            </div>
+            {showArchive && (
+              <p className="text-xs text-muted">
+                Archivierte Schüler:innen werden {retentionDays} Tage nach der Archivierung automatisch endgültig gelöscht.
+                Bucht eine archivierte Person selbst wieder einen Kurs, wird sie automatisch wiederhergestellt.
+              </p>
+            )}
             {customers.map((c) => (
               <div key={c.id} className="rounded-2xl p-5 border border-border bg-surface">
                 {editingCustomerId === c.id ? (
@@ -892,14 +939,26 @@ export default function AdminPage() {
                         <p className="text-xs text-muted">{c.email}{c.phone ? ` · ${c.phone}` : ""}</p>
                       </div>
                       <div className="flex gap-2 flex-wrap">
-                        <button onClick={() => startAssign(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Produkt zuweisen</button>
-                        <button onClick={() => openAccessPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Freigaben</button>
-                        <button onClick={() => openEnrollPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Feste Zuteilung</button>
-                        <button onClick={() => toggleDetails(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">
-                          {historyForCustomerId === c.id ? "Details schließen" : "Details"}
-                        </button>
-                        <button onClick={() => startEditCustomer(c)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">Bearbeiten</button>
-                        <button onClick={() => deleteCustomer(c.id, c.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Entfernen</button>
+                        {!showArchive ? (
+                          <>
+                            <button onClick={() => startAssign(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Produkt zuweisen</button>
+                            <button onClick={() => openAccessPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Freigaben</button>
+                            <button onClick={() => openEnrollPanel(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Feste Zuteilung</button>
+                            <button onClick={() => toggleDetails(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">
+                              {historyForCustomerId === c.id ? "Details schließen" : "Details"}
+                            </button>
+                            <button onClick={() => startEditCustomer(c)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">Bearbeiten</button>
+                            <button onClick={() => archiveCustomer(c.id, c.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Archivieren</button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs text-muted self-center">
+                              archiviert am {c.archived_at?.slice(0, 10)} · endgültige Löschung am {new Date(new Date(c.archived_at).getTime() + retentionDays * 86400000).toISOString().slice(0, 10)}
+                            </span>
+                            <button onClick={() => restoreCustomer(c.id)} className="text-xs px-3 py-1 rounded-full border border-border text-gold">Wiederherstellen</button>
+                            <button onClick={() => deleteCustomerForever(c.id, c.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Jetzt endgültig löschen</button>
+                          </>
+                        )}
                       </div>
                     </div>
 

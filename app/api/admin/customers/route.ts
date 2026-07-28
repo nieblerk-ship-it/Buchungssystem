@@ -2,26 +2,42 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { checkAdminPassword } from "@/lib/adminAuth";
 
-// GET /api/admin/customers?password=...
-// Liefert alle Schüler:innen inkl. ihrer zugewiesenen Produkte.
+const RETENTION_DAYS = 90;
+
+// GET /api/admin/customers?password=...            -> aktive Schüler:innen
+// GET /api/admin/customers?password=...&archived=1 -> Archiv
+// Beim Öffnen des Archivs werden Einträge, deren Aufbewahrungsfrist
+// (90 Tage nach Archivierung) abgelaufen ist, automatisch endgültig gelöscht.
 export async function GET(req: Request) {
   const url = new URL(req.url);
   if (!checkAdminPassword(url.searchParams.get("password"))) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
+  const showArchived = url.searchParams.get("archived") === "1";
   const db = supabaseAdmin();
-  const { data, error } = await db
+
+  if (showArchived) {
+    // Automatische Bereinigung: alles löschen, was länger als 90 Tage archiviert ist
+    const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
+    await db.from("customers").delete().not("archived_at", "is", null).lt("archived_at", cutoff);
+  }
+
+  let query = db
     .from("customers")
     .select(
-      `id, name, email, phone, level, notes, created_at,
+      `id, name, email, phone, level, notes, created_at, archived_at,
        customer_products (
          id, valid_from, valid_until, credits_total, credits_remaining, active, notes, is_reduced, price_paid_cents,
          product:products ( id, name, category, requires_payment_confirmation, allowed_categories )
        )`
     )
     .order("name");
+
+  query = showArchived ? query.not("archived_at", "is", null) : query.is("archived_at", null);
+
+  const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ customers: data });
+  return NextResponse.json({ customers: data, retentionDays: RETENTION_DAYS });
 }
 
 // POST /api/admin/customers
@@ -53,22 +69,36 @@ export async function POST(req: Request) {
 
 // PATCH /api/admin/customers
 // body: { password, id, ...felder }
+// Sonderfelder: { archive: true } archiviert, { restore: true } stellt wieder her.
 export async function PATCH(req: Request) {
   const body = await req.json();
   if (!checkAdminPassword(body.password)) {
     return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
   }
-  const { id, password, ...fields } = body;
+  const { id, password, archive, restore, ...fields } = body;
   if (!id) return NextResponse.json({ error: "Schüler-ID fehlt." }, { status: 400 });
+
+  const updateFields: Record<string, unknown> = { ...fields };
+  if (archive) updateFields.archived_at = new Date().toISOString();
+  if (restore) updateFields.archived_at = null;
+
   const db = supabaseAdmin();
-  const { error } = await db.from("customers").update(fields).eq("id", id);
+  const { error } = await db.from("customers").update(updateFields).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Beim Archivieren laufende feste Zuteilungen beenden, damit die Person
+  // nicht weiter automatisch in Termine gebucht wird. Bestehende Buchungen
+  // bleiben unverändert erhalten.
+  if (archive) {
+    await db.from("enrollments").update({ active: false }).eq("customer_id", id).eq("active", true);
+  }
+
   return NextResponse.json({ ok: true });
 }
 
 // DELETE /api/admin/customers?password=...&id=...
-// Löscht eine:n Schüler:in vollständig (inkl. Buchungen & Produktzuweisungen
-// per Datenbank-Kaskade). Wird über einen Bestätigungsdialog im Frontend abgesichert.
+// Endgültiges Löschen — nur für bereits archivierte Schüler:innen erlaubt
+// (inkl. Buchungen & Produktzuweisungen per Datenbank-Kaskade).
 export async function DELETE(req: Request) {
   const url = new URL(req.url);
   if (!checkAdminPassword(url.searchParams.get("password"))) {
@@ -76,7 +106,14 @@ export async function DELETE(req: Request) {
   }
   const id = url.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Schüler-ID fehlt." }, { status: 400 });
+
   const db = supabaseAdmin();
+  const { data: customer } = await db.from("customers").select("archived_at").eq("id", id).maybeSingle();
+  if (!customer) return NextResponse.json({ error: "Schüler:in nicht gefunden." }, { status: 404 });
+  if (!customer.archived_at) {
+    return NextResponse.json({ error: "Bitte zuerst archivieren — endgültiges Löschen ist nur aus dem Archiv möglich." }, { status: 409 });
+  }
+
   const { error } = await db.from("customers").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
