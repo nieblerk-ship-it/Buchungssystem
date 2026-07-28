@@ -116,6 +116,23 @@ export default function AdminPage() {
   const [showArchive, setShowArchive] = useState(false);
   const [retentionDays, setRetentionDays] = useState(90);
   const [archiveDialog, setArchiveDialog] = useState<{ id: string; name: string } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    danger?: boolean;
+    action: () => void | Promise<void>;
+  } | null>(null);
+
+  function askConfirm(title: string, message: string, confirmLabel: string, action: () => void | Promise<void>, danger = false) {
+    setConfirmDialog({ title, message, confirmLabel, danger, action });
+  }
+  async function runConfirm() {
+    if (!confirmDialog) return;
+    const act = confirmDialog.action;
+    setConfirmDialog(null);
+    await act();
+  }
   const [expandedProducts, setExpandedProducts] = useState<string[]>([]);
   const [renewingId, setRenewingId] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
@@ -239,13 +256,22 @@ export default function AdminPage() {
   async function saveEditCourse() {
     const original = courses.find((c) => c.id === editingCourseId);
     const bigChange = original?.weekday !== editCourse.weekday || original?.start_time !== editCourse.start_time;
-    if (bigChange && !confirm(`Du änderst Wochentag/Uhrzeit von "${original?.name}". Für die nächsten 4 Wochen werden zusätzlich Termine am neuen Tag erzeugt, alte Termine bleiben bestehen. Fortfahren?`)) {
+    if (bigChange) {
+      askConfirm(
+        "Wochentag/Uhrzeit ändern",
+        `Du änderst Wochentag/Uhrzeit von "${original?.name}". Für die nächsten 4 Wochen werden zusätzlich Termine am neuen Tag erzeugt, alte Termine bleiben bestehen und können einzeln abgesagt werden.`,
+        "Ändern",
+        () => doSaveEditCourse(true)
+      );
       return;
     }
+    await doSaveEditCourse(false);
+  }
+  async function doSaveEditCourse(regenerate: boolean) {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/courses", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: editingCourseId, ...editCourse, regenerate: bigChange }),
+      body: JSON.stringify({ password, id: editingCourseId, ...editCourse, regenerate }),
     });
     const data = await res.json();
     setSaving(false);
@@ -253,12 +279,19 @@ export default function AdminPage() {
     setEditingCourseId(null);
     await loadCourses(); await loadSessions();
   }
-  async function deactivateCourse(id: string, name: string) {
-    if (!confirm(`Kurs "${name}" deaktivieren? Er verschwindet von der Buchungsseite, bestehende Termine/Buchungen bleiben erhalten.`)) return;
-    setActionError(null);
-    const res = await fetch(`/api/admin/courses?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
-    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
-    await loadCourses();
+  function deactivateCourse(id: string, name: string) {
+    askConfirm(
+      "Kurs deaktivieren",
+      `Kurs "${name}" deaktivieren? Er verschwindet von der Buchungsseite, bestehende Termine und Buchungen bleiben erhalten.`,
+      "Deaktivieren",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/courses?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await loadCourses();
+      },
+      true
+    );
   }
 
   // ---- Schüler:innen ----
@@ -312,12 +345,19 @@ export default function AdminPage() {
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadCustomers();
   }
-  async function deleteCustomerForever(id: string, name: string) {
-    if (!confirm(`"${name}" JETZT endgültig löschen? Das entfernt auch alle Buchungen und Produktzuweisungen unwiderruflich und kann nicht rückgängig gemacht werden.`)) return;
-    setActionError(null);
-    const res = await fetch(`/api/admin/customers?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
-    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
-    await loadCustomers();
+  function deleteCustomerForever(id: string, name: string) {
+    askConfirm(
+      "Endgültig löschen",
+      `"${name}" JETZT endgültig löschen? Das Konto und alle Produktzuweisungen werden unwiderruflich entfernt. Vergangene Buchungen bleiben mit Name und E-Mail als Nachweis erhalten. Dieser Schritt kann nicht rückgängig gemacht werden.`,
+      "Endgültig löschen",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/customers?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await loadCustomers();
+      },
+      true
+    );
   }
   function startAssign(customerId: string) {
     setAssigningFor(customerId);
@@ -367,8 +407,18 @@ export default function AdminPage() {
   }
   async function submitRenew(cp: any) {
     if (cp.valid_until && renewDate && renewDate < cp.valid_until) {
-      if (!confirm(`Das verkürzt die Gültigkeit von ${cp.valid_until} auf ${renewDate}. Bist du sicher?`)) return;
+      askConfirm(
+        "Gültigkeit verkürzen",
+        `Das verkürzt die Gültigkeit von ${cp.valid_until} auf ${renewDate}. Die Person kann das Produkt danach nur noch bis zum neuen Datum nutzen.`,
+        "Verkürzen",
+        () => doSubmitRenew(cp),
+        true
+      );
+      return;
     }
+    await doSubmitRenew(cp);
+  }
+  async function doSubmitRenew(cp: any) {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customer-products", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -395,12 +445,19 @@ export default function AdminPage() {
     setReactivatingId(null);
     await loadCustomers();
   }
-  async function removeCustomerProduct(cpId: string) {
-    if (!confirm("Diese Produktzuweisung entfernen?")) return;
-    setActionError(null);
-    const res = await fetch(`/api/admin/customer-products?password=${encodeURIComponent(password)}&id=${cpId}`, { method: "DELETE" });
-    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
-    await loadCustomers();
+  function removeCustomerProduct(cpId: string) {
+    askConfirm(
+      "Produktzuweisung entfernen",
+      "Diese Produktzuweisung wird von der Person entfernt. Bereits damit verknüpfte Buchungen bleiben bestehen.",
+      "Entfernen",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/customer-products?password=${encodeURIComponent(password)}&id=${cpId}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await loadCustomers();
+      },
+      true
+    );
   }
 
   // ---- Kurs-Freigaben ----
@@ -414,9 +471,20 @@ export default function AdminPage() {
   }
   async function submitOverride(e: React.FormEvent) {
     e.preventDefault();
-    if (overrideForm.access === "deny" && !confirm("Diese Person wird damit von der Buchung dieses Kurses ausgeschlossen — auch wenn ein passendes Produkt vorliegt. Fortfahren?")) {
+    if (overrideForm.access === "deny") {
+      const course = courses.find((c) => c.id === overrideForm.courseId);
+      askConfirm(
+        "Kurs sperren",
+        `Diese Person wird von der Buchung von "${course?.name ?? "diesem Kurs"}" ausgeschlossen — auch wenn ein passendes Produkt vorliegt.`,
+        "Sperren",
+        () => doSubmitOverride(),
+        true
+      );
       return;
     }
+    await doSubmitOverride();
+  }
+  async function doSubmitOverride() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/course-access", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -446,24 +514,37 @@ export default function AdminPage() {
   async function submitEnrollment(e: React.FormEvent) {
     e.preventDefault();
     const course = courses.find((c) => c.id === enrollForm.courseId);
-    if (!confirm(`"${course?.name}" fest für diese:n Schüler:in eintragen? Dabei werden alle passenden künftigen Termine sofort automatisch gebucht — auch wenn sie eigentlich schon voll sind. Fortfahren?`)) return;
-    setSaving(true); setActionError(null);
-    const res = await fetch("/api/admin/enrollments", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, customerId: enrollPanelFor, ...enrollForm }),
-    });
-    const data = await res.json();
-    setSaving(false);
-    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
-    await openEnrollPanel(enrollPanelFor!);
-    await loadSessions();
+    askConfirm(
+      "Feste Zuteilung anlegen",
+      `"${course?.name}" fest für diese:n Schüler:in eintragen? Dabei werden alle passenden künftigen Termine sofort automatisch gebucht — auch wenn sie eigentlich schon voll sind.`,
+      "Fest zuteilen",
+      async () => {
+        setSaving(true); setActionError(null);
+        const res = await fetch("/api/admin/enrollments", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password, customerId: enrollPanelFor, ...enrollForm }),
+        });
+        const data = await res.json();
+        setSaving(false);
+        if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+        await openEnrollPanel(enrollPanelFor!);
+        await loadSessions();
+      }
+    );
   }
-  async function removeEnrollment(id: string) {
-    if (!confirm("Diese feste Zuteilung beenden? Bereits gebuchte Termine bleiben bestehen und müssten separat im Reiter \"Anmeldungen\" entfernt werden.")) return;
-    setActionError(null);
-    const res = await fetch(`/api/admin/enrollments?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
-    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
-    await openEnrollPanel(enrollPanelFor!);
+  function removeEnrollment(id: string) {
+    askConfirm(
+      "Feste Zuteilung beenden",
+      "Diese feste Zuteilung wird beendet. Bereits gebuchte Termine bleiben bestehen und müssten separat im Reiter \"Anmeldungen\" entfernt werden.",
+      "Beenden",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/enrollments?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await openEnrollPanel(enrollPanelFor!);
+      },
+      true
+    );
   }
 
   // ---- Produkte ----
@@ -515,12 +596,19 @@ export default function AdminPage() {
     setEditingProductId(null);
     await loadProducts();
   }
-  async function deactivateProduct(id: string, name: string) {
-    if (!confirm(`Produkt "${name}" deaktivieren?`)) return;
-    setActionError(null);
-    const res = await fetch(`/api/admin/products?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
-    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
-    await loadProducts();
+  function deactivateProduct(id: string, name: string) {
+    askConfirm(
+      "Produkt deaktivieren",
+      `Produkt "${name}" deaktivieren? Es kann dann keinen Schüler:innen mehr neu zugewiesen werden. Bestehende Zuweisungen bleiben unverändert.`,
+      "Deaktivieren",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/products?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await loadProducts();
+      },
+      true
+    );
   }
   function toggleCategory(list: string[], cat: string) {
     return list.includes(cat) ? list.filter((c) => c !== cat) : [...list, cat];
@@ -1345,6 +1433,24 @@ export default function AdminPage() {
           </div>
         );
       })()}
+
+      {confirmDialog && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: "#0A0910CC" }}>
+          <div className="w-full max-w-md rounded-2xl p-6 bg-surface border border-border">
+            <h3 className="font-display text-xl text-ivory mb-3">{confirmDialog.title}</h3>
+            <p className="text-sm text-muted mb-5">{confirmDialog.message}</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setConfirmDialog(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+              <button
+                onClick={runConfirm}
+                className={`px-4 py-2 rounded-full text-sm font-medium ${confirmDialog.danger ? "bg-wine text-ivory" : "bg-gold text-bg"}`}
+              >
+                {confirmDialog.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {archiveDialog && (
         <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: "#0A0910CC" }}>
