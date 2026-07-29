@@ -1,17 +1,15 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-
-function checkPassword(password: string | null) {
-  return !!password && password === process.env.ADMIN_PASSWORD;
-}
+import { requireAdmin } from "@/lib/adminAuth";
+import { logAction } from "@/lib/auditLog";
 
 // PATCH /api/admin/sessions
-// body: { password, sessionId, cancelled?, capacity_override? }
+// body: { sessionId, cancelled?, capacity_override? }
 export async function PATCH(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const { sessionId, cancelled, capacity_override } = body;
   if (!sessionId) return NextResponse.json({ error: "Termin-ID fehlt." }, { status: 400 });
 
@@ -22,5 +20,8 @@ export async function PATCH(req: Request) {
   const db = supabaseAdmin();
   const { error } = await db.from("course_sessions").update(fields).eq("id", sessionId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (typeof cancelled === "boolean") {
+    await logAction(admin, cancelled ? "cancel" : "reactivate", "session", sessionId, cancelled ? "Termin abgesagt" : "Termin wieder aktiviert");
+  }
   return NextResponse.json({ ok: true });
 }

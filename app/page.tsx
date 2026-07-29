@@ -107,11 +107,14 @@ export default function Home() {
     setShowPicker(false);
   }
 
+  const [bookingResultStatus, setBookingResultStatus] = useState<"confirmed" | "waitlisted" | null>(null);
+
   function openBooking(s: any) {
     setSelected(s);
     setForm({ name: "", email: "" });
     setFormError(null);
     setConfirmed(false);
+    setBookingResultStatus(null);
   }
 
   async function submitBooking(e: React.FormEvent) {
@@ -130,7 +133,12 @@ export default function Home() {
       setFormError(data.error ?? "Etwas ist schiefgelaufen.");
       return;
     }
-    setSessions((prev) => prev.map((s) => (s.id === selected.id ? { ...s, booked: s.booked + 1 } : s)));
+    setSessions((prev) => prev.map((s) => (s.id === selected.id
+      ? data.status === "waitlisted"
+        ? { ...s, waitlisted: (s.waitlisted ?? 0) + 1 }
+        : { ...s, booked: s.booked + 1 }
+      : s)));
+    setBookingResultStatus(data.status);
     setConfirmed(true);
   }
 
@@ -275,16 +283,15 @@ export default function Home() {
                             {s.course.room && <div className="text-muted mt-0.5">{s.course.room}</div>}
                             <div className="flex items-center gap-2 mt-1.5 text-muted">
                               <span className="flex items-center gap-1"><Clock size={10} />{s.course.start_time?.slice(0, 5)}</span>
-                              <span className="flex items-center gap-1"><Users size={10} />{s.booked}/{s.capacity}</span>
+                              <span className="flex items-center gap-1"><Users size={10} />{s.booked}/{s.capacity}{s.waitlisted > 0 ? ` · ${s.waitlisted} Warteliste` : ""}</span>
                             </div>
                             <button
-                              disabled={full}
                               onClick={() => openBooking(s)}
                               className={`mt-2 w-full py-1.5 rounded-full text-xs font-medium ${
-                                full ? "bg-border text-muted cursor-not-allowed" : "bg-wine text-ivory"
+                                full ? "bg-surface border border-gold text-gold" : "bg-wine text-ivory"
                               }`}
                             >
-                              {full ? "Ausgebucht" : "Anmelden"}
+                              {full ? "Auf Warteliste anmelden" : "Anmelden"}
                             </button>
                           </div>
                         );
@@ -339,12 +346,16 @@ export default function Home() {
               </>
             ) : (
               <div className="text-center py-4">
-                <div className="w-12 h-12 rounded-full mx-auto flex items-center justify-center mb-4" style={{ background: "#8FAE8B33" }}>
-                  <Check size={22} style={{ color: "#8FAE8B" }} />
+                <div className="w-12 h-12 rounded-full mx-auto flex items-center justify-center mb-4" style={{ background: bookingResultStatus === "waitlisted" ? "#C9A15E33" : "#8FAE8B33" }}>
+                  <Check size={22} style={{ color: bookingResultStatus === "waitlisted" ? "#C9A15E" : "#8FAE8B" }} />
                 </div>
-                <h3 className="font-display text-xl mb-1 text-ivory">Angemeldet!</h3>
+                <h3 className="font-display text-xl mb-1 text-ivory">
+                  {bookingResultStatus === "waitlisted" ? "Auf der Warteliste!" : "Angemeldet!"}
+                </h3>
                 <p className="text-sm text-muted">
-                  {form.name}, du bist für {selected.course.name} am {selected.session_date} eingetragen.
+                  {bookingResultStatus === "waitlisted"
+                    ? `${form.name}, der Kurs ist aktuell voll. Du stehst für ${selected.course.name} am ${selected.session_date} auf der Warteliste und rückst automatisch nach, sobald ein Platz frei wird.`
+                    : `${form.name}, du bist für ${selected.course.name} am ${selected.session_date} eingetragen.`}
                 </p>
                 <button
                   onClick={() => setSelected(null)}

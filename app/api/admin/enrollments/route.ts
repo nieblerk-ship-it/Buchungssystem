@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { checkAdminPassword } from "@/lib/adminAuth";
+import { requireAdmin } from "@/lib/adminAuth";
+import { logAction } from "@/lib/auditLog";
 import { ensureEnrollmentBookings } from "@/lib/enrollments";
 
-// GET /api/admin/enrollments?password=...&customerId=...
+// GET /api/admin/enrollments?customerId=...
 export async function GET(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const url = new URL(req.url);
-  if (!checkAdminPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const customerId = url.searchParams.get("customerId");
   if (!customerId) return NextResponse.json({ error: "Schüler-ID fehlt." }, { status: 400 });
 
@@ -23,14 +24,15 @@ export async function GET(req: Request) {
 }
 
 // POST /api/admin/enrollments
-// body: { password, customerId, courseId, valid_from?, valid_until?, notes? }
-// Trägt eine:n Schüler:in fest in einen Kurs ein und bucht sofort alle
-// passenden künftigen Termine (ohne Kapazitätsprüfung — Admin-Entscheidung geht vor).
+// body: { customerId, courseId, valid_from?, valid_until?, notes? }
+// Trägt eine:n Schüler:in fest in einen Kurs ein und reiht sie/ihn in die
+// normale Buchungs-/Wartelisten-Warteschlange für die passenden künftigen
+// Termine ein.
 export async function POST(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkAdminPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const { customerId, courseId, valid_from, valid_until, notes } = body;
   if (!customerId || !courseId) {
     return NextResponse.json({ error: "Schüler und Kurs müssen angegeben sein." }, { status: 400 });
@@ -50,21 +52,23 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const bookedCount = await ensureEnrollmentBookings(db, courseId);
+  await logAction(admin, "create", "enrollment", data.id, `Feste Zuteilung angelegt (Kurs-ID ${courseId}, ${bookedCount} Termine gebucht)`);
   return NextResponse.json({ id: data.id, bookedCount });
 }
 
-// DELETE /api/admin/enrollments?password=...&id=...
+// DELETE /api/admin/enrollments?id=...
 // Deaktiviert die Zuteilung (bereits erzeugte Buchungen bleiben bestehen,
 // können im Reiter "Anmeldungen" einzeln entfernt werden).
 export async function DELETE(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const url = new URL(req.url);
-  if (!checkAdminPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const id = url.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "ID fehlt." }, { status: 400 });
   const db = supabaseAdmin();
   const { error } = await db.from("enrollments").update({ active: false }).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await logAction(admin, "end", "enrollment", id, "Feste Zuteilung beendet");
   return NextResponse.json({ ok: true });
 }

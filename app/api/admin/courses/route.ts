@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { checkAdminPassword as checkPassword } from "@/lib/adminAuth";
+import { requireAdmin } from "@/lib/adminAuth";
+import { logAction } from "@/lib/auditLog";
 import { ensureEnrollmentBookings } from "@/lib/enrollments";
 
-// GET /api/admin/courses?password=...
+// GET /api/admin/courses
 // Liefert ALLE Kurse (auch inaktive), zum Bearbeiten in der Admin-Oberfläche.
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  if (!checkPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
+export async function GET() {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("courses")
@@ -22,14 +22,14 @@ export async function GET(req: Request) {
 }
 
 // POST /api/admin/courses
-// body: { password, name, category, level, instructor, room, weekday, start_time,
+// body: { name, category, level, instructor, room, trainer_id, weekday, start_time,
 //         duration_minutes, capacity, notes }
 // Legt einen neuen Kurs an und erzeugt direkt Termine für die nächsten 4 Wochen.
 export async function POST(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const { name, category, level, instructor, room, trainer_id, weekday, start_time, duration_minutes, capacity, notes } = body;
 
   if (!name?.trim() || !category?.trim() || !weekday || !start_time || !capacity) {
@@ -59,20 +59,21 @@ export async function POST(req: Request) {
 
   await generateSessionsForCourse(db, course.id, weekday, 28);
   await ensureEnrollmentBookings(db, course.id);
+  await logAction(admin, "create", "course", course.id, `Kurs "${name.trim()}" angelegt`);
 
   return NextResponse.json({ id: course.id });
 }
 
 // PATCH /api/admin/courses
-// body: { password, id, ...felder, regenerate?: boolean }
+// body: { id, ...felder, regenerate?: boolean }
 // Aktualisiert einen bestehenden Kurs. Falls sich der Wochentag ändert und
 // regenerate=true übergeben wird, werden zusätzlich neue Termine erzeugt.
 export async function PATCH(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
-  const { id, regenerate, password, ...fields } = body;
+  const { id, regenerate, ...fields } = body;
   if (!id) return NextResponse.json({ error: "Kurs-ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
@@ -83,24 +84,26 @@ export async function PATCH(req: Request) {
     await generateSessionsForCourse(db, id, fields.weekday, 28);
   }
   await ensureEnrollmentBookings(db, id);
+  await logAction(admin, "update", "course", id, `Kurs "${fields.name ?? id}" bearbeitet`);
 
   return NextResponse.json({ ok: true });
 }
 
-// DELETE /api/admin/courses?password=...&id=...
+// DELETE /api/admin/courses?id=...
 // Deaktiviert einen Kurs (soft delete) statt ihn zu löschen, damit alte
 // Buchungen/Termine erhalten bleiben.
 export async function DELETE(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const url = new URL(req.url);
-  if (!checkPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const id = url.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Kurs-ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
   const { error } = await db.from("courses").update({ active: false }).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await logAction(admin, "deactivate", "course", id, "Kurs deaktiviert");
   return NextResponse.json({ ok: true });
 }
 

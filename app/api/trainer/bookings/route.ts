@@ -44,8 +44,8 @@ export async function GET() {
     time: s.course?.start_time,
     capacity: s.capacity_override ?? s.course?.capacity,
     participants: (s.bookings ?? [])
-      .filter((b: any) => b.status === "confirmed")
-      .map((b: any) => ({ bookingId: b.id, name: b.customer?.name ?? b.deleted_customer_name ?? "Unbekannt", email: b.customer?.email ?? b.deleted_customer_email ?? "", notes: b.notes ?? "", source: b.source ?? "self", attended: b.attended })),
+      .filter((b: any) => b.status === "confirmed" || b.status === "waitlisted")
+      .map((b: any) => ({ bookingId: b.id, name: b.customer?.name ?? b.deleted_customer_name ?? "Unbekannt", email: b.customer?.email ?? b.deleted_customer_email ?? "", notes: b.notes ?? "", source: b.source ?? "self", status: b.status, attended: b.attended })),
   }));
 
   return NextResponse.json({ sessions: result });
@@ -68,13 +68,16 @@ export async function PATCH(req: Request) {
   // bevor etwas verändert wird.
   const { data: booking } = await db
     .from("bookings")
-    .select("id, course_session:course_sessions(course:courses(trainer_id))")
+    .select("id, status, course_session:course_sessions(course:courses(trainer_id))")
     .eq("id", bookingId)
     .maybeSingle();
 
   const ownerTrainerId = (booking?.course_session as any)?.course?.trainer_id;
   if (!booking || ownerTrainerId !== trainerId) {
     return NextResponse.json({ error: "Diese Buchung gehört nicht zu einem deiner Kurse." }, { status: 403 });
+  }
+  if (booking.status !== "confirmed") {
+    return NextResponse.json({ error: "Anwesenheit kann nur für bestätigte Buchungen erfasst werden." }, { status: 409 });
   }
 
   const { error } = await db.from("bookings").update({ attended }).eq("id", bookingId);

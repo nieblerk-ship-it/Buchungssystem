@@ -1,0 +1,12 @@
+-- Migration 11: Warteliste (Phase C)
+--
+-- Kein struktureller Schema-Wechsel nötig: bookings.status war schon immer
+-- ein freies Textfeld ('confirmed' | 'cancelled'), jetzt kommt zusätzlich
+-- 'waitlisted' als möglicher Wert dazu. Es gibt nichts auszuführen — diese
+-- Datei dokumentiert nur die neue Bedeutung der Spalte für den Fall, dass du
+-- die Datenbank später nachvollziehen willst.
+--
+-- bookings.status:
+--   'confirmed'  = zählt zur Kapazität, sichtbar für Trainer:innen, Anwesenheit erfassbar
+--   'waitlisted' = wartet auf freien Platz, rückt automatisch nach bei Absagen
+--   'cancelled'  = storniert / entfernt, bleibt als Nachweis erhalten

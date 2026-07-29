@@ -1,18 +1,19 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { checkAdminPassword } from "@/lib/adminAuth";
+import { requireAdmin } from "@/lib/adminAuth";
+import { logAction } from "@/lib/auditLog";
 
 const RETENTION_DAYS = 90;
 
-// GET /api/admin/customers?password=...            -> aktive Schüler:innen
-// GET /api/admin/customers?password=...&archived=1 -> Archiv
+// GET /api/admin/customers            -> aktive Schüler:innen
+// GET /api/admin/customers?archived=1 -> Archiv
 // Beim Öffnen des Archivs werden Einträge, deren Aufbewahrungsfrist
 // (90 Tage nach Archivierung) abgelaufen ist, automatisch endgültig gelöscht.
 export async function GET(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const url = new URL(req.url);
-  if (!checkAdminPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const showArchived = url.searchParams.get("archived") === "1";
   const db = supabaseAdmin();
 
@@ -31,6 +32,7 @@ export async function GET(req: Request) {
     }
     if (expired && expired.length > 0) {
       await db.from("customers").delete().in("id", expired.map((c) => c.id));
+      await logAction(admin, "auto-delete", "customer", null, `${expired.length} Schüler:in(nen) automatisch endgültig gelöscht (Aufbewahrungsfrist abgelaufen)`);
     }
   }
 
@@ -53,12 +55,12 @@ export async function GET(req: Request) {
 }
 
 // POST /api/admin/customers
-// body: { password, name, email, phone, level, notes }
+// body: { name, email, phone, level, notes }
 export async function POST(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkAdminPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const { name, email, phone, level, notes } = body;
   if (!name?.trim() || !email?.trim()) {
     return NextResponse.json({ error: "Bitte Name und E-Mail angeben." }, { status: 400 });
@@ -76,18 +78,19 @@ export async function POST(req: Request) {
     .select("id")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await logAction(admin, "create", "customer", data.id, `Schüler:in "${name.trim()}" angelegt`);
   return NextResponse.json({ id: data.id });
 }
 
 // PATCH /api/admin/customers
-// body: { password, id, ...felder }
+// body: { id, ...felder }
 // Sonderfelder: { archive: true } archiviert, { restore: true } stellt wieder her.
 export async function PATCH(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkAdminPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
-  const { id, password, archive, restore, ...fields } = body;
+  const { id, archive, restore, ...fields } = body;
   if (!id) return NextResponse.json({ error: "Schüler-ID fehlt." }, { status: 400 });
 
   const updateFields: Record<string, unknown> = { ...fields };
@@ -103,19 +106,23 @@ export async function PATCH(req: Request) {
   // bleiben unverändert erhalten.
   if (archive) {
     await db.from("enrollments").update({ active: false }).eq("customer_id", id).eq("active", true);
+    await logAction(admin, "archive", "customer", id, "Schüler:in archiviert");
+  } else if (restore) {
+    await logAction(admin, "restore", "customer", id, "Schüler:in wiederhergestellt");
+  } else {
+    await logAction(admin, "update", "customer", id, "Schüler:in bearbeitet");
   }
 
   return NextResponse.json({ ok: true });
 }
 
-// DELETE /api/admin/customers?password=...&id=...
-// Endgültiges Löschen — nur für bereits archivierte Schüler:innen erlaubt
-// (inkl. Buchungen & Produktzuweisungen per Datenbank-Kaskade).
+// DELETE /api/admin/customers?id=...
+// Endgültiges Löschen — nur für bereits archivierte Schüler:innen erlaubt.
 export async function DELETE(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const url = new URL(req.url);
-  if (!checkAdminPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const id = url.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Schüler-ID fehlt." }, { status: 400 });
 
@@ -132,5 +139,6 @@ export async function DELETE(req: Request) {
 
   const { error } = await db.from("customers").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await logAction(admin, "delete", "customer", id, `Schüler:in "${customer.name}" (${customer.email}) endgültig gelöscht`);
   return NextResponse.json({ ok: true });
 }

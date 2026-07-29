@@ -21,14 +21,16 @@ export async function GET() {
   const sessionIds = (sessions ?? []).map((s) => s.id);
   const { data: bookings } = await db
     .from("bookings")
-    .select("course_session_id")
+    .select("course_session_id, status")
     .in("course_session_id", sessionIds)
-    .eq("status", "confirmed");
+    .in("status", ["confirmed", "waitlisted"]);
 
   const bookedCount: Record<string, number> = {};
+  const waitlistCount: Record<string, number> = {};
   (bookings ?? []).forEach((b) => {
     if (!b.course_session_id) return;
-    bookedCount[b.course_session_id] = (bookedCount[b.course_session_id] ?? 0) + 1;
+    if (b.status === "confirmed") bookedCount[b.course_session_id] = (bookedCount[b.course_session_id] ?? 0) + 1;
+    if (b.status === "waitlisted") waitlistCount[b.course_session_id] = (waitlistCount[b.course_session_id] ?? 0) + 1;
   });
 
   const result = (sessions ?? [])
@@ -36,6 +38,7 @@ export async function GET() {
     .map((s) => ({
       ...s,
       booked: bookedCount[s.id] ?? 0,
+      waitlisted: waitlistCount[s.id] ?? 0,
       capacity: s.capacity_override ?? (s.course as any)?.capacity,
     }));
 

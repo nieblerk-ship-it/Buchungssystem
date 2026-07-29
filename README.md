@@ -225,6 +225,33 @@ Absichtlich (noch) nicht enthalten: die separate Zahlungsbestätigung pro
 Kartentyp (Drop-in/USC-Zuzahlung) aus der ursprünglichen Anforderung — dafür
 gibt es weiterhin das freie Kommentarfeld pro Buchung.
 
+## Phase D – Individuelle Admin-Logins & Änderungslog (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_12_admin_accounts_audit_log.sql`
+(die Datei enthält am Ende auch das SQL, um dein erstes Admin-Konto anzulegen — unbedingt ausführen, sonst kommst du nicht mehr rein!)
+
+**Wichtig — Breaking Change:** Das gemeinsame `ADMIN_PASSWORD` funktioniert nicht mehr.
+Du kannst die Zeile aus `.env.local` entfernen. Stattdessen brauchst du:
+
+```
+ADMIN_SESSION_SECRET=irgendein-anderer-langer-zufaelliger-text
+```
+
+- Admin-Login läuft jetzt über **E-Mail + Passwort**, genau wie beim Trainer-Login
+  — Passwörter werden mit bcrypt gehasht gespeichert.
+- Weitere Admin-Konten legst du direkt in Supabase per SQL an (nach demselben
+  Muster wie das erste, siehe Migrationsdatei) — eine Verwaltungsoberfläche
+  dafür in der App selbst gibt es bewusst nicht, um zu verhindern, dass sich
+  ein Admin-Konto selbst weitere Rechte verschafft.
+- Neuer Reiter **"Änderungslog"**: zeigt jede Änderung mit Zeitstempel,
+  Bearbeiter:in, Aktion, Bereich und Beschreibung. Filterbar nach Zeitraum,
+  Bearbeiter:in, Bereich und Freitext-Suche. **"Als Excel exportieren"** lädt
+  die gefilterte Liste als `.xlsx` herunter.
+- Der Log ist **unveränderlich**: es gibt in der App keine Funktion, um
+  Einträge zu bearbeiten oder zu löschen — nur anzulegen (automatisch bei
+  jeder Änderung) und zu lesen.
+- `npm install` nötig (neue Abhängigkeit `xlsx` für den Excel-Export).
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 

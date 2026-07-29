@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { checkAdminPassword } from "@/lib/adminAuth";
+import { requireAdmin } from "@/lib/adminAuth";
 
-// GET /api/admin/customer-history?password=...&customerId=...
+// GET /api/admin/customer-history?customerId=...
 // Liefert ALLE Buchungen (Vergangenheit + Zukunft, auch stornierte) einer
 // Schülerin, inkl. welchem Produkt sie zugeordnet waren — für die
 // "Details"-Historie und den Guthaben-Verlauf je Produkt.
 export async function GET(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const url = new URL(req.url);
-  if (!checkAdminPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const customerId = url.searchParams.get("customerId");
   if (!customerId) return NextResponse.json({ error: "Schüler-ID fehlt." }, { status: 400 });
 

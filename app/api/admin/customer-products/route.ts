@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { checkAdminPassword } from "@/lib/adminAuth";
+import { requireAdmin } from "@/lib/adminAuth";
+import { logAction } from "@/lib/auditLog";
 
 // POST /api/admin/customer-products
-// body: { password, customerId, productId, valid_from?, valid_until?, credits_total?, isReduced?, notes? }
+// body: { customerId, productId, valid_from?, valid_until?, credits_total?, isReduced?, notes? }
 // Weist einer/einem Schüler:in ein Produkt zu. Laufzeit/Guthaben werden, falls
 // nicht angegeben, aus dem Produkt übernommen (auch rückwirkend/nach Ablauf möglich).
 export async function POST(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkAdminPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const { customerId, productId, valid_from, valid_until, credits_total, isReduced, notes } = body;
   if (!customerId || !productId) {
     return NextResponse.json({ error: "Schüler und Produkt müssen angegeben sein." }, { status: 400 });
@@ -47,38 +48,41 @@ export async function POST(req: Request) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await logAction(admin, "assign", "customer_product", data.id, `Produkt "${product.name}" zugewiesen (bis ${until ?? "unbegrenzt"})`);
   return NextResponse.json({ id: data.id });
 }
 
 // PATCH /api/admin/customer-products
-// body: { password, id, valid_until?, credits_remaining?, active?, productId?, notes? }
+// body: { id, valid_until?, credits_remaining?, active?, productId?, notes? }
 // Admin kann jederzeit Laufzeit verlängern, Guthaben anpassen, das Produkt
 // wechseln oder eine Zuweisung deaktivieren.
 export async function PATCH(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkAdminPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
-  const { id, password, productId, ...fields } = body;
+  const { id, productId, ...fields } = body;
   if (!id) return NextResponse.json({ error: "ID fehlt." }, { status: 400 });
   if (productId) (fields as any).product_id = productId;
 
   const db = supabaseAdmin();
   const { error } = await db.from("customer_products").update(fields).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await logAction(admin, "update", "customer_product", id, `Produktzuweisung geändert: ${JSON.stringify(fields)}`);
   return NextResponse.json({ ok: true });
 }
 
-// DELETE /api/admin/customer-products?password=...&id=...
+// DELETE /api/admin/customer-products?id=...
 export async function DELETE(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const url = new URL(req.url);
-  if (!checkAdminPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
   const id = url.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "ID fehlt." }, { status: 400 });
   const db = supabaseAdmin();
   const { error } = await db.from("customer_products").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await logAction(admin, "remove", "customer_product", id, "Produktzuweisung entfernt");
   return NextResponse.json({ ok: true });
 }

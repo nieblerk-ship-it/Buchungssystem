@@ -219,7 +219,10 @@ export default function TrainerPage() {
         </div>
       </div>
 
-      {selectedSession && (
+      {selectedSession && (() => {
+        const confirmed = selectedSession.participants.filter((p: any) => p.status === "confirmed");
+        const waitlist = selectedSession.participants.filter((p: any) => p.status === "waitlisted");
+        return (
         <div className="mt-8 rounded-2xl p-5 border border-border bg-surface">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h3 className="font-display text-lg text-ivory">
@@ -227,15 +230,16 @@ export default function TrainerPage() {
               {selectedSession.cancelled && <span className="ml-2 text-xs text-wine">(abgesagt)</span>}
             </h3>
             <span className="text-xs text-muted">
-              {selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {selectedSession.participants.length}/{selectedSession.capacity}
-              {" · "}{selectedSession.participants.filter((p: any) => p.attended !== null && p.attended !== undefined).length}/{selectedSession.participants.length} erfasst
+              {selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {confirmed.length}/{selectedSession.capacity}
+              {waitlist.length > 0 ? ` · ${waitlist.length} Warteliste` : ""}
+              {" · "}{confirmed.filter((p: any) => p.attended !== null && p.attended !== undefined).length}/{confirmed.length} erfasst
             </span>
           </div>
-          {selectedSession.participants.length === 0 ? (
+          {confirmed.length === 0 ? (
             <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
           ) : (
             <ul className="mt-3 text-sm text-ivory space-y-1.5">
-              {selectedSession.participants.map((p: any, i: number) => (
+              {confirmed.map((p: any, i: number) => (
                 <li key={i} className="flex items-center gap-1.5 flex-wrap">
                   <div className="flex items-center gap-1">
                     <button
@@ -258,8 +262,22 @@ export default function TrainerPage() {
               ))}
             </ul>
           )}
+          {waitlist.length > 0 && (
+            <div className="mt-4">
+              <h4 className="text-xs uppercase tracking-wide text-gold mb-2">Warteliste ({waitlist.length})</h4>
+              <ul className="text-sm text-ivory space-y-1">
+                {waitlist.map((p: any, i: number) => (
+                  <li key={i} className="flex items-center gap-1.5 flex-wrap text-muted">
+                    <span className="text-xs w-5">{i + 1}.</span>
+                    {p.name} <span>— {p.email}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

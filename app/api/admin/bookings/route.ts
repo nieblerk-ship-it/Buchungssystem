@@ -1,18 +1,19 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { checkAdminPassword } from "@/lib/adminAuth";
+import { requireAdmin } from "@/lib/adminAuth";
+import { logAction } from "@/lib/auditLog";
+import { promoteFromWaitlist } from "@/lib/waitlist";
 
-// GET /api/admin/bookings?password=...
+// GET /api/admin/bookings
 // Liefert Termine der letzten 60 Tage bis unbegrenzt in die Zukunft (damit
 // auch die Anwesenheit vergangener Termine noch nachgetragen werden kann),
-// inkl. Teilnehmer:innen: ob ein aktives, passendes Produkt vorliegt (nur
-// Hinweis), welche aktiven Produkte zur Auswahl stehen, ob die Buchung aus
-// einer festen Zuteilung stammt, Raum des Kurses und Anwesenheitsstatus.
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  if (!checkAdminPassword(url.searchParams.get("password"))) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
+// inkl. Teilnehmer:innen (bestätigt UND Warteliste): ob ein aktives, passendes
+// Produkt vorliegt (nur Hinweis), welche aktiven Produkte zur Auswahl stehen,
+// ob die Buchung aus einer festen Zuteilung stammt, Raum des Kurses und
+// Anwesenheitsstatus.
+export async function GET() {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
 
   const db = supabaseAdmin();
   const from = new Date();
@@ -23,7 +24,7 @@ export async function GET(req: Request) {
     .select(
       `id, session_date, cancelled, capacity_override,
        course:courses ( name, level, category, room, start_time, capacity ),
-       bookings ( id, status, notes, source, customer_product_id, attended, deleted_customer_name, deleted_customer_email, customer:customers ( id, name, email ) )`
+       bookings ( id, status, notes, source, customer_product_id, attended, created_at, deleted_customer_name, deleted_customer_email, customer:customers ( id, name, email ) )`
     )
     .gte("session_date", from.toISOString().slice(0, 10))
     .order("session_date", { ascending: true });
@@ -61,24 +62,27 @@ export async function GET(req: Request) {
       .map((cp: any) => ({ id: cp.id, name: cp.product?.name }));
   }
 
-  const result = (sessions ?? []).map((s: any) => ({
-    id: s.id,
-    date: s.session_date,
-    cancelled: s.cancelled,
-    courseName: s.course?.name,
-    level: s.course?.level,
-    time: s.course?.start_time,
-    room: s.course?.room,
-    capacity: s.capacity_override ?? s.course?.capacity,
-    participants: (s.bookings ?? [])
-      .filter((b: any) => b.status === "confirmed")
-      .map((b: any) => ({
+  const result = (sessions ?? []).map((s: any) => {
+    const relevant = (s.bookings ?? [])
+      .filter((b: any) => b.status === "confirmed" || b.status === "waitlisted")
+      .sort((a: any, b: any) => (a.created_at < b.created_at ? -1 : 1));
+    return {
+      id: s.id,
+      date: s.session_date,
+      cancelled: s.cancelled,
+      courseName: s.course?.name,
+      level: s.course?.level,
+      time: s.course?.start_time,
+      room: s.course?.room,
+      capacity: s.capacity_override ?? s.course?.capacity,
+      participants: relevant.map((b: any) => ({
         bookingId: b.id,
         name: b.customer?.name ?? b.deleted_customer_name ?? "Unbekannt",
         email: b.customer?.email ?? b.deleted_customer_email ?? "",
         accountDeleted: !b.customer,
         notes: b.notes ?? "",
         source: b.source ?? "self",
+        status: b.status,
         customerProductId: b.customer_product_id,
         attended: b.attended,
         availableProducts: b.customer?.id ? productsFor(b.customer.id) : [],
@@ -86,28 +90,51 @@ export async function GET(req: Request) {
           ? hasActiveProduct(b.customer.id, s.course?.category, s.session_date)
           : false,
       })),
-  }));
+    };
+  });
 
   return NextResponse.json({ sessions: result });
 }
 
 // PATCH /api/admin/bookings
-// body: { password, bookingId, notes?, customerProductId?, attended? }
+// body: { bookingId, notes?, customerProductId?, attended?, status? }
+// status: 'confirmed' | 'waitlisted' | 'cancelled' — Admin darf jederzeit direkt
+// setzen (auch über Kapazität hinaus). Wird eine Buchung von 'confirmed' weg
+// geändert, rückt automatisch die nächste Person von der Warteliste nach.
 export async function PATCH(req: Request) {
+  const admin = await requireAdmin();
+  if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
+
   const body = await req.json();
-  if (!checkAdminPassword(body.password)) {
-    return NextResponse.json({ error: "Falsches Passwort." }, { status: 401 });
-  }
-  const { bookingId, notes, customerProductId, attended } = body;
+  const { bookingId, notes, customerProductId, attended, status } = body;
   if (!bookingId) return NextResponse.json({ error: "Buchungs-ID fehlt." }, { status: 400 });
+
+  const db = supabaseAdmin();
+
+  const { data: before } = await db.from("bookings").select("status, course_session_id").eq("id", bookingId).maybeSingle();
 
   const fields: Record<string, unknown> = {};
   if (notes !== undefined) fields.notes = notes || null;
   if (customerProductId !== undefined) fields.customer_product_id = customerProductId || null;
   if (attended !== undefined) fields.attended = attended;
+  if (status !== undefined) fields.status = status;
 
-  const db = supabaseAdmin();
   const { error } = await db.from("bookings").update(fields).eq("id", bookingId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (status !== undefined && before?.status === "confirmed" && status !== "confirmed" && before.course_session_id) {
+    await promoteFromWaitlist(db, before.course_session_id);
+  }
+
+  if (status !== undefined) {
+    await logAction(admin, "status-change", "booking", bookingId, `Buchungsstatus geändert: ${before?.status ?? "?"} → ${status}`);
+  } else if (attended !== undefined) {
+    await logAction(admin, "attendance", "booking", bookingId, `Anwesenheit gesetzt: ${attended === true ? "da" : attended === false ? "gefehlt" : "zurückgesetzt"}`);
+  } else if (notes !== undefined) {
+    await logAction(admin, "note", "booking", bookingId, `Kommentar geändert: "${notes}"`);
+  } else if (customerProductId !== undefined) {
+    await logAction(admin, "assign-product", "booking", bookingId, "Produkt der Buchung zugeordnet");
+  }
+
   return NextResponse.json({ ok: true });
 }

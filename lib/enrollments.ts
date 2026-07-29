@@ -1,10 +1,12 @@
 import { supabaseAdmin } from "@/lib/supabase";
+import { statusForNewBooking } from "@/lib/waitlist";
 
 // Legt für alle aktiven festen Zuteilungen (enrollments) eines Kurses automatisch
 // Buchungen für die künftigen, noch nicht gebuchten Termine an. Wird sowohl beim
 // Anlegen einer Zuteilung als auch beim (Neu-)Erzeugen von Kursterminen aufgerufen,
 // damit auch später generierte Termine automatisch mitgebucht werden.
-// Kapazitätsprüfung wird hier bewusst übersprungen — Admin-Zuteilung ist Vorrang.
+// Zählt in derselben Warteschlange wie Selbstbuchungen: ist der Termin zum
+// Zeitpunkt der Zuteilung schon voll, landet die Person auf der Warteliste.
 export async function ensureEnrollmentBookings(db: ReturnType<typeof supabaseAdmin>, courseId: string) {
   const { data: enrollments } = await db
     .from("enrollments")
@@ -14,9 +16,11 @@ export async function ensureEnrollmentBookings(db: ReturnType<typeof supabaseAdm
 
   if (!enrollments || enrollments.length === 0) return 0;
 
+  const { data: course } = await db.from("courses").select("capacity").eq("id", courseId).single();
+
   const { data: sessions } = await db
     .from("course_sessions")
-    .select("id, session_date")
+    .select("id, session_date, capacity_override")
     .eq("course_id", courseId)
     .eq("cancelled", false)
     .gte("session_date", new Date().toISOString().slice(0, 10));
@@ -37,14 +41,17 @@ export async function ensureEnrollmentBookings(db: ReturnType<typeof supabaseAdm
         .select("id")
         .eq("customer_id", enrollment.customer_id)
         .eq("course_session_id", session.id)
-        .eq("status", "confirmed")
+        .in("status", ["confirmed", "waitlisted"])
         .maybeSingle();
       if (existing) continue;
+
+      const capacity = session.capacity_override ?? course?.capacity ?? 0;
+      const status = await statusForNewBooking(db, session.id, capacity);
 
       const { error } = await db.from("bookings").insert({
         customer_id: enrollment.customer_id,
         course_session_id: session.id,
-        status: "confirmed",
+        status,
         source: "enrollment",
       });
       if (!error) created++;

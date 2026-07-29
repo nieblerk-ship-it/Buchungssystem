@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -42,6 +42,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+function confirmedCount(s: any) {
+  return (s.participants ?? []).filter((p: any) => p.status === "confirmed").length;
+}
+function waitlistCount(s: any) {
+  return (s.participants ?? []).filter((p: any) => p.status === "waitlisted").length;
+}
+
 // ---- Datumshilfen für die Wochenansicht (wie auf der Buchungsseite) ----
 function formatDateOnly(d: Date): string {
   const y = d.getFullYear();
@@ -74,12 +81,14 @@ function isSameDay(a: Date, b: Date) {
 }
 
 export default function AdminPage() {
-  const [password, setPassword] = useState("");
   const [unlocked, setUnlocked] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [adminName, setAdminName] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "meldungen" | "trainer">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "meldungen" | "trainer" | "log">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [trainers, setTrainers] = useState<any[]>([]);
   const [newTrainer, setNewTrainer] = useState({ name: "", email: "", newPassword: "" });
@@ -92,6 +101,11 @@ export default function AdminPage() {
   const [showPicker, setShowPicker] = useState(false);
   const [pickerMonth, setPickerMonth] = useState<Date>(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [rosterEditingFor, setRosterEditingFor] = useState<string | null>(null);
+  const [rosterEntries, setRosterEntries] = useState<any[]>([]);
+  const [rosterNewName, setRosterNewName] = useState("");
+  const [rosterNewEmail, setRosterNewEmail] = useState("");
+  const [rosterSearch, setRosterSearch] = useState("");
   const [sessions, setSessions] = useState<any[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -150,35 +164,71 @@ export default function AdminPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [logEntries, setLogEntries] = useState<any[]>([]);
+  const [logAdmins, setLogAdmins] = useState<any[]>([]);
+  const [logFilter, setLogFilter] = useState({ from: "", to: "", adminId: "", entityType: "", search: "" });
+  const [logLoading, setLogLoading] = useState(false);
+
+  async function loadAll() {
+    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers()]);
+  }
+
+  useEffect(() => {
+    (async () => {
+      const res = await fetch("/api/admin/me");
+      if (res.ok) {
+        const data = await res.json();
+        setAdminName(data.admin.name);
+        setUnlocked(true);
+        await loadAll();
+      }
+      setCheckingSession(false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (tab === "log" && unlocked) loadLog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
   async function login(e?: React.FormEvent) {
     e?.preventDefault();
     setLoading(true);
     setLoginError(null);
-    const res = await fetch(`/api/admin/bookings?password=${encodeURIComponent(password)}`);
+    const res = await fetch("/api/admin/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(loginForm),
+    });
     const data = await res.json();
     setLoading(false);
     if (!res.ok) {
-      setLoginError(data.error ?? "Fehler beim Laden.");
+      setLoginError(data.error ?? "Fehler beim Login.");
       return;
     }
-    setSessions(data.sessions);
+    setAdminName(data.name);
     setUnlocked(true);
-    await Promise.all([loadCourses(), loadCustomers(), loadProducts(), loadTrainers()]);
+    await loadAll();
+  }
+  async function logout() {
+    await fetch("/api/admin/logout", { method: "POST" });
+    setUnlocked(false);
+    setAdminName("");
+    setLoginForm({ email: "", password: "" });
   }
 
   async function loadSessions() {
-    const res = await fetch(`/api/admin/bookings?password=${encodeURIComponent(password)}`);
+    const res = await fetch(`/api/admin/bookings`);
     const data = await res.json();
     if (res.ok) setSessions(data.sessions);
   }
   async function loadCourses() {
-    const res = await fetch(`/api/admin/courses?password=${encodeURIComponent(password)}`);
+    const res = await fetch(`/api/admin/courses`);
     const data = await res.json();
     if (res.ok) setCourses(data.courses);
   }
   async function loadCustomers(archived?: boolean) {
     const arch = archived ?? showArchive;
-    const res = await fetch(`/api/admin/customers?password=${encodeURIComponent(password)}${arch ? "&archived=1" : ""}`);
+    const res = await fetch(`/api/admin/customers${arch ? "?archived=1" : ""}`);
     const data = await res.json();
     if (res.ok) {
       setCustomers(data.customers);
@@ -190,14 +240,36 @@ export default function AdminPage() {
     await loadCustomers(archived);
   }
   async function loadProducts() {
-    const res = await fetch(`/api/admin/products?password=${encodeURIComponent(password)}`);
+    const res = await fetch(`/api/admin/products`);
     const data = await res.json();
     if (res.ok) setProducts(data.products);
   }
   async function loadTrainers() {
-    const res = await fetch(`/api/admin/trainers?password=${encodeURIComponent(password)}`);
+    const res = await fetch(`/api/admin/trainers`);
     const data = await res.json();
     if (res.ok) setTrainers(data.trainers);
+  }
+  async function loadLog() {
+    setLogLoading(true);
+    const params = new URLSearchParams();
+    if (logFilter.from) params.set("from", logFilter.from);
+    if (logFilter.to) params.set("to", logFilter.to);
+    if (logFilter.adminId) params.set("adminId", logFilter.adminId);
+    if (logFilter.entityType) params.set("entityType", logFilter.entityType);
+    if (logFilter.search) params.set("search", logFilter.search);
+    const res = await fetch(`/api/admin/audit-log?${params.toString()}`);
+    const data = await res.json();
+    setLogLoading(false);
+    if (res.ok) { setLogEntries(data.entries); setLogAdmins(data.admins); }
+  }
+  function exportLog() {
+    const params = new URLSearchParams();
+    if (logFilter.from) params.set("from", logFilter.from);
+    if (logFilter.to) params.set("to", logFilter.to);
+    if (logFilter.adminId) params.set("adminId", logFilter.adminId);
+    if (logFilter.entityType) params.set("entityType", logFilter.entityType);
+    if (logFilter.search) params.set("search", logFilter.search);
+    window.location.href = `/api/admin/audit-log/export?${params.toString()}`;
   }
 
   // ---- Termine (Anmeldungen) ----
@@ -205,7 +277,7 @@ export default function AdminPage() {
     setActionError(null);
     const res = await fetch("/api/admin/sessions", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, sessionId, cancelled }),
+      body: JSON.stringify({ sessionId, cancelled }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadSessions();
@@ -214,7 +286,7 @@ export default function AdminPage() {
     setActionError(null);
     const res = await fetch("/api/admin/bookings", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, bookingId, notes }),
+      body: JSON.stringify({ bookingId, notes }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Speichern des Kommentars."); return; }
     await loadSessions();
@@ -223,7 +295,7 @@ export default function AdminPage() {
     setActionError(null);
     const res = await fetch("/api/admin/bookings", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, bookingId, customerProductId }),
+      body: JSON.stringify({ bookingId, customerProductId }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Zuordnen des Produkts."); return; }
     await loadSessions();
@@ -232,9 +304,94 @@ export default function AdminPage() {
     setActionError(null);
     const res = await fetch("/api/admin/bookings", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, bookingId, attended }),
+      body: JSON.stringify({ bookingId, attended }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler beim Speichern der Anwesenheit."); return; }
+    await loadSessions();
+  }
+  function cancelBooking(bookingId: string, name: string) {
+    askConfirm(
+      "Buchung stornieren",
+      `Buchung von "${name}" stornieren? Ist noch jemand auf der Warteliste, rückt automatisch die nächste Person nach.`,
+      "Stornieren",
+      async () => {
+        setActionError(null);
+        const res = await fetch("/api/admin/bookings", {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bookingId, status: "cancelled" }),
+        });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await loadSessions();
+      },
+      true
+    );
+  }
+  async function promoteBooking(bookingId: string) {
+    setActionError(null);
+    const res = await fetch("/api/admin/bookings", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bookingId, status: "confirmed" }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadSessions();
+  }
+
+  // ---- Teilnehmer verwalten (Roster-Editor) ----
+  function openRosterEditor(session: any) {
+    setRosterEditingFor(session.id);
+    setRosterEntries(
+      session.participants.map((p: any) => ({
+        key: p.bookingId,
+        bookingId: p.bookingId,
+        name: p.name,
+        email: p.email,
+        targetStatus: p.status,
+      }))
+    );
+    setRosterNewName(""); setRosterNewEmail(""); setRosterSearch("");
+  }
+  function updateRosterEntry(key: string, targetStatus: string) {
+    setRosterEntries((prev) => prev.map((e) => (e.key === key ? { ...e, targetStatus } : e)));
+  }
+  function addExistingToRoster(customerId: string) {
+    const c = customers.find((cu) => cu.id === customerId);
+    if (!c) return;
+    if (rosterEntries.some((e) => e.email === c.email)) return;
+    setRosterEntries((prev) => [...prev, { key: `new-${customerId}`, customerId, name: c.name, email: c.email, targetStatus: "confirmed" }]);
+  }
+  function addNewToRoster() {
+    if (!rosterNewName.trim() || !rosterNewEmail.trim()) return;
+    if (rosterEntries.some((e) => e.email.toLowerCase() === rosterNewEmail.trim().toLowerCase())) return;
+    setRosterEntries((prev) => [...prev, {
+      key: `new-${Date.now()}`, newCustomerName: rosterNewName.trim(), newCustomerEmail: rosterNewEmail.trim(),
+      name: rosterNewName.trim(), email: rosterNewEmail.trim(), targetStatus: "confirmed",
+    }]);
+    setRosterNewName(""); setRosterNewEmail(""); setRosterSearch("");
+  }
+  function submitRoster(session: any) {
+    const confirmedTarget = rosterEntries.filter((e) => e.targetStatus === "confirmed").length;
+    if (confirmedTarget > session.capacity) {
+      askConfirm(
+        "Kurs wird überbucht",
+        `Mit diesen Änderungen wären ${confirmedTarget} Personen bestätigt, der Kurs hat aber nur ${session.capacity} Plätze. Das ist möglich, wird aber im Kalender rot markiert.`,
+        "Trotzdem speichern",
+        () => doSubmitRoster(session),
+        true
+      );
+      return;
+    }
+    doSubmitRoster(session);
+  }
+  async function doSubmitRoster(session: any) {
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/sessions/roster", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: session.id, entries: rosterEntries }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setRosterEditingFor(null);
     await loadSessions();
   }
 
@@ -244,7 +401,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/courses", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, ...newCourse }),
+      body: JSON.stringify({ ...newCourse }),
     });
     const data = await res.json();
     setSaving(false);
@@ -271,7 +428,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/courses", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: editingCourseId, ...editCourse, regenerate }),
+      body: JSON.stringify({ id: editingCourseId, ...editCourse, regenerate }),
     });
     const data = await res.json();
     setSaving(false);
@@ -286,7 +443,7 @@ export default function AdminPage() {
       "Deaktivieren",
       async () => {
         setActionError(null);
-        const res = await fetch(`/api/admin/courses?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/admin/courses?id=${id}`, { method: "DELETE" });
         if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
         await loadCourses();
       },
@@ -300,7 +457,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customers", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, ...newCustomer }),
+      body: JSON.stringify({ ...newCustomer }),
     });
     const data = await res.json();
     setSaving(false);
@@ -313,7 +470,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customers", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: editingCustomerId, ...editCustomer }),
+      body: JSON.stringify({ id: editingCustomerId, ...editCustomer }),
     });
     const data = await res.json();
     setSaving(false);
@@ -329,7 +486,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customers", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: archiveDialog.id, archive: true }),
+      body: JSON.stringify({ id: archiveDialog.id, archive: true }),
     });
     setSaving(false);
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
@@ -340,7 +497,7 @@ export default function AdminPage() {
     setActionError(null);
     const res = await fetch("/api/admin/customers", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id, restore: true }),
+      body: JSON.stringify({ id, restore: true }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadCustomers();
@@ -352,7 +509,7 @@ export default function AdminPage() {
       "Endgültig löschen",
       async () => {
         setActionError(null);
-        const res = await fetch(`/api/admin/customers?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/admin/customers?id=${id}`, { method: "DELETE" });
         if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
         await loadCustomers();
       },
@@ -369,7 +526,7 @@ export default function AdminPage() {
     const res = await fetch("/api/admin/customer-products", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        password, customerId: assigningFor, productId: assignForm.productId,
+        customerId: assigningFor, productId: assignForm.productId,
         valid_from: assignForm.valid_from || undefined,
         valid_until: assignForm.valid_until || undefined,
         credits_total: assignForm.credits_total ? Number(assignForm.credits_total) : undefined,
@@ -383,7 +540,7 @@ export default function AdminPage() {
     await loadCustomers();
   }
   async function loadHistory(customerId: string) {
-    const res = await fetch(`/api/admin/customer-history?password=${encodeURIComponent(password)}&customerId=${customerId}`);
+    const res = await fetch(`/api/admin/customer-history?customerId=${customerId}`);
     const data = await res.json();
     if (res.ok) {
       setHistoryBookings(data.bookings);
@@ -422,7 +579,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customer-products", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: cp.id, valid_until: renewDate || null }),
+      body: JSON.stringify({ id: cp.id, valid_until: renewDate || null }),
     });
     setSaving(false);
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
@@ -438,7 +595,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/customer-products", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: cp.id, active: true, valid_until: reactivateDate }),
+      body: JSON.stringify({ id: cp.id, active: true, valid_until: reactivateDate }),
     });
     setSaving(false);
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
@@ -452,7 +609,7 @@ export default function AdminPage() {
       "Entfernen",
       async () => {
         setActionError(null);
-        const res = await fetch(`/api/admin/customer-products?password=${encodeURIComponent(password)}&id=${cpId}`, { method: "DELETE" });
+        const res = await fetch(`/api/admin/customer-products?id=${cpId}`, { method: "DELETE" });
         if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
         await loadCustomers();
       },
@@ -465,7 +622,7 @@ export default function AdminPage() {
     setAccessPanelFor(customerId);
     setEnrollPanelFor(null);
     setOverrideForm({ courseId: courses.find((c) => c.active)?.id ?? "", access: "allow", notes: "" });
-    const res = await fetch(`/api/admin/course-access?password=${encodeURIComponent(password)}&customerId=${customerId}`);
+    const res = await fetch(`/api/admin/course-access?customerId=${customerId}`);
     const data = await res.json();
     if (res.ok) setOverrides(data.overrides);
   }
@@ -488,7 +645,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/course-access", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, customerId: accessPanelFor, ...overrideForm }),
+      body: JSON.stringify({ customerId: accessPanelFor, ...overrideForm }),
     });
     const data = await res.json();
     setSaving(false);
@@ -497,7 +654,7 @@ export default function AdminPage() {
   }
   async function removeOverride(id: string) {
     setActionError(null);
-    const res = await fetch(`/api/admin/course-access?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/admin/course-access?id=${id}`, { method: "DELETE" });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await openAccessPanel(accessPanelFor!);
   }
@@ -507,7 +664,7 @@ export default function AdminPage() {
     setEnrollPanelFor(customerId);
     setAccessPanelFor(null);
     setEnrollForm({ courseId: courses.find((c) => c.active)?.id ?? "", valid_from: new Date().toISOString().slice(0, 10), valid_until: "", notes: "" });
-    const res = await fetch(`/api/admin/enrollments?password=${encodeURIComponent(password)}&customerId=${customerId}`);
+    const res = await fetch(`/api/admin/enrollments?customerId=${customerId}`);
     const data = await res.json();
     if (res.ok) setEnrollments(data.enrollments);
   }
@@ -516,13 +673,13 @@ export default function AdminPage() {
     const course = courses.find((c) => c.id === enrollForm.courseId);
     askConfirm(
       "Feste Zuteilung anlegen",
-      `"${course?.name}" fest für diese:n Schüler:in eintragen? Dabei werden alle passenden künftigen Termine sofort automatisch gebucht — auch wenn sie eigentlich schon voll sind.`,
+      `"${course?.name}" fest für diese:n Schüler:in eintragen? Dabei wird sie automatisch für alle passenden künftigen Termine eingetragen — sind die schon voll, landet sie wie bei einer normalen Buchung auf der Warteliste und rückt bei Absagen automatisch nach.`,
       "Fest zuteilen",
       async () => {
         setSaving(true); setActionError(null);
         const res = await fetch("/api/admin/enrollments", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password, customerId: enrollPanelFor, ...enrollForm }),
+          body: JSON.stringify({ customerId: enrollPanelFor, ...enrollForm }),
         });
         const data = await res.json();
         setSaving(false);
@@ -539,7 +696,7 @@ export default function AdminPage() {
       "Beenden",
       async () => {
         setActionError(null);
-        const res = await fetch(`/api/admin/enrollments?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/admin/enrollments?id=${id}`, { method: "DELETE" });
         if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
         await openEnrollPanel(enrollPanelFor!);
       },
@@ -554,7 +711,7 @@ export default function AdminPage() {
     const res = await fetch("/api/admin/products", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        password, ...newProduct,
+        ...newProduct,
         price_cents: Math.round(Number(newProduct.price_cents) * 100),
         reduced_price_cents: newProduct.reduced_price_cents ? Math.round(Number(newProduct.reduced_price_cents) * 100) : null,
         credits: newProduct.credits ? Number(newProduct.credits) : null,
@@ -582,7 +739,7 @@ export default function AdminPage() {
     const res = await fetch("/api/admin/products", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        password, id: editingProductId, ...editProduct,
+        id: editingProductId, ...editProduct,
         price_cents: Math.round(Number(editProduct.price_cents) * 100),
         reduced_price_cents: editProduct.reduced_price_cents ? Math.round(Number(editProduct.reduced_price_cents) * 100) : null,
         credits: editProduct.credits ? Number(editProduct.credits) : null,
@@ -603,7 +760,7 @@ export default function AdminPage() {
       "Deaktivieren",
       async () => {
         setActionError(null);
-        const res = await fetch(`/api/admin/products?password=${encodeURIComponent(password)}&id=${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/admin/products?id=${id}`, { method: "DELETE" });
         if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
         await loadProducts();
       },
@@ -620,7 +777,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/trainers", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, ...newTrainer }),
+      body: JSON.stringify({ ...newTrainer }),
     });
     const data = await res.json();
     setSaving(false);
@@ -632,7 +789,7 @@ export default function AdminPage() {
     setActionError(null);
     const res = await fetch("/api/admin/trainers", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id, active }),
+      body: JSON.stringify({ id, active }),
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadTrainers();
@@ -642,7 +799,7 @@ export default function AdminPage() {
     setSaving(true); setActionError(null);
     const res = await fetch("/api/admin/trainers", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, id: resetPasswordFor, newPassword: resetPasswordValue }),
+      body: JSON.stringify({ id: resetPasswordFor, newPassword: resetPasswordValue }),
     });
     const data = await res.json();
     setSaving(false);
@@ -651,13 +808,18 @@ export default function AdminPage() {
     setResetPasswordValue("");
   }
 
+  if (checkingSession) {
+    return <div className="min-h-screen flex items-center justify-center bg-bg"><p className="text-sm text-muted">Lade…</p></div>;
+  }
+
   if (!unlocked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg px-6">
         <form onSubmit={login} className="w-full max-w-sm space-y-3">
           <Link href="/" className="flex items-center gap-1 text-xs text-muted mb-4"><ArrowLeft size={12} /> Zurück zur Buchungsseite</Link>
           <h1 className="font-display text-2xl mb-4 text-ivory">Admin-Login</h1>
-          <input type="password" placeholder="Passwort" value={password} onChange={(e) => setPassword(e.target.value)} className={`w-full ${inputClass}`} />
+          <input required type="email" placeholder="E-Mail" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} className={`w-full ${inputClass}`} />
+          <input required type="password" placeholder="Passwort" value={loginForm.password} onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })} className={`w-full ${inputClass}`} />
           {loginError && <p className="text-xs text-wine">{loginError}</p>}
           <button type="submit" disabled={loading} className="w-full py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
             {loading ? "Prüfe…" : "Anmelden"}
@@ -671,7 +833,11 @@ export default function AdminPage() {
     <div className="min-h-screen bg-bg px-6 py-10 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="font-display text-3xl text-ivory">Admin</h1>
-        <Link href="/" className="flex items-center gap-1 text-xs text-muted"><ArrowLeft size={12} /> Zur Buchungsseite</Link>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted">Angemeldet als {adminName}</span>
+          <button onClick={logout} className="text-xs text-muted hover:text-wine">Abmelden</button>
+          <Link href="/" className="flex items-center gap-1 text-xs text-muted"><ArrowLeft size={12} /> Zur Buchungsseite</Link>
+        </div>
       </div>
 
       <nav className="flex gap-1 mb-8 flex-wrap">
@@ -682,6 +848,7 @@ export default function AdminPage() {
           { id: "produkte", label: "Produkte" },
           { id: "trainer", label: "Trainer:innen" },
           { id: "meldungen", label: "Meldungen" },
+          { id: "log", label: "Änderungslog" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`px-4 py-2 text-sm rounded-full ${tab === t.id ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
@@ -781,7 +948,8 @@ export default function AdminPage() {
                       <div className="space-y-2">
                         {list.length === 0 && <p className="text-xs text-muted text-center">–</p>}
                         {list.map((s) => {
-                          const overbooked = s.participants.length > s.capacity;
+                          const overbooked = confirmedCount(s) > s.capacity;
+                          const wl = waitlistCount(s);
                           const isSelected = s.id === selectedSessionId;
                           return (
                             <button
@@ -794,7 +962,7 @@ export default function AdminPage() {
                               <div className="text-ivory font-medium">{s.courseName}</div>
                               {s.room && <div className="text-muted mt-0.5">{s.room}</div>}
                               <div className={`mt-1 ${overbooked ? "text-red-500 font-bold" : "text-muted"}`}>
-                                {s.time?.slice(0, 5)} · {s.participants.length}/{s.capacity}{overbooked ? " ÜBERBUCHT" : ""}
+                                {s.time?.slice(0, 5)} · {confirmedCount(s)}/{s.capacity}{wl > 0 ? ` · ${wl} WL` : ""}{overbooked ? " ÜBERBUCHT" : ""}
                               </div>
                               {s.cancelled && <div className="text-wine mt-0.5">abgesagt</div>}
                             </button>
@@ -807,79 +975,183 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {selectedSession && (
-              <div className={`mt-8 rounded-2xl p-5 border bg-surface ${selectedSession.participants.length > selectedSession.capacity ? "border-2 border-red-500" : "border-border"}`}>
+            {selectedSession && (() => {
+              const confirmed = selectedSession.participants.filter((p: any) => p.status === "confirmed");
+              const waitlist = selectedSession.participants.filter((p: any) => p.status === "waitlisted");
+              const overbooked = confirmed.length > selectedSession.capacity;
+              return (
+              <div className={`mt-8 rounded-2xl p-5 border bg-surface ${overbooked ? "border-2 border-red-500" : "border-border"}`}>
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <h3 className="font-display text-lg text-ivory">
                     {selectedSession.courseName} {selectedSession.level ? `– ${selectedSession.level}` : ""} {selectedSession.room ? <span className="text-xs text-muted">· {selectedSession.room}</span> : null}
                     {selectedSession.cancelled && <span className="ml-2 text-xs text-wine">(abgesagt)</span>}
                   </h3>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-xs ${selectedSession.participants.length > selectedSession.capacity ? "text-red-500 font-bold" : "text-muted"}`}>
-                      {selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {selectedSession.participants.length}/{selectedSession.capacity}
-                      {selectedSession.participants.length > selectedSession.capacity ? " ÜBERBUCHT" : ""}
-                      {" · "}{selectedSession.participants.filter((p: any) => p.attended !== null && p.attended !== undefined).length}/{selectedSession.participants.length} erfasst
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className={`text-xs ${overbooked ? "text-red-500 font-bold" : "text-muted"}`}>
+                      {selectedSession.date} · {selectedSession.time?.slice(0, 5)} · {confirmed.length}/{selectedSession.capacity}
+                      {waitlist.length > 0 ? ` · ${waitlist.length} Warteliste` : ""}
+                      {overbooked ? " ÜBERBUCHT" : ""}
+                      {" · "}{confirmed.filter((p: any) => p.attended !== null && p.attended !== undefined).length}/{confirmed.length} erfasst
                     </span>
+                    <button onClick={() => openRosterEditor(selectedSession)} className="text-xs px-3 py-1 rounded-full border border-gold text-gold">
+                      Teilnehmer verwalten
+                    </button>
                     <button onClick={() => toggleCancelled(selectedSession.id, !selectedSession.cancelled)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">
                       {selectedSession.cancelled ? "Wieder aktivieren" : "Termin absagen"}
                     </button>
                     <button onClick={() => setSelectedSessionId(null)} className="text-xs text-muted underline">Schließen</button>
                   </div>
                 </div>
+
                 {selectedSession.participants.length === 0 ? (
                   <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
                 ) : (
-                  <ul className="mt-3 text-sm text-ivory space-y-2">
-                    {selectedSession.participants.map((p: any, i: number) => (
-                      <li key={i} className="flex items-center gap-1.5 flex-wrap">
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => saveAttendance(p.bookingId, p.attended === true ? null : true)}
-                            className={`text-xs px-2 py-1 rounded-lg border ${p.attended === true ? "bg-green-600/20 border-green-500 text-green-400" : "border-border text-muted"}`}
-                          >
-                            ✓ Da
-                          </button>
-                          <button
-                            onClick={() => saveAttendance(p.bookingId, p.attended === false ? null : false)}
-                            className={`text-xs px-2 py-1 rounded-lg border ${p.attended === false ? "bg-red-600/20 border-red-500 text-red-400" : "border-border text-muted"}`}
-                          >
-                            ✗ Fehlt
-                          </button>
-                        </div>
-                        {p.name} <span className="text-muted">— {p.email}</span>
-                        {p.accountDeleted && (
-                          <span className="text-xs px-2 py-0.5 rounded-full border border-border text-muted">Konto gelöscht</span>
-                        )}
-                        {p.source === "enrollment" && (
-                          <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
-                        )}
-                        {!p.hasActiveProduct && !p.accountDeleted && (
-                          <span className="flex items-center gap-1 text-xs text-gold ml-1" title="Kein aktives, passendes Produkt hinterlegt">
-                            <AlertTriangle size={12} /> kein aktives Produkt
-                          </span>
-                        )}
-                        {p.availableProducts?.length > 0 && (
+                  <>
+                    <ul className="mt-3 text-sm text-ivory space-y-2">
+                      {confirmed.map((p: any, i: number) => (
+                        <li key={i} className="flex items-center gap-1.5 flex-wrap">
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => saveAttendance(p.bookingId, p.attended === true ? null : true)}
+                              className={`text-xs px-2 py-1 rounded-lg border ${p.attended === true ? "bg-green-600/20 border-green-500 text-green-400" : "border-border text-muted"}`}
+                            >
+                              ✓ Da
+                            </button>
+                            <button
+                              onClick={() => saveAttendance(p.bookingId, p.attended === false ? null : false)}
+                              className={`text-xs px-2 py-1 rounded-lg border ${p.attended === false ? "bg-red-600/20 border-red-500 text-red-400" : "border-border text-muted"}`}
+                            >
+                              ✗ Fehlt
+                            </button>
+                          </div>
+                          {p.name} <span className="text-muted">— {p.email}</span>
+                          {p.accountDeleted && (
+                            <span className="text-xs px-2 py-0.5 rounded-full border border-border text-muted">Konto gelöscht</span>
+                          )}
+                          {p.source === "enrollment" && (
+                            <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
+                          )}
+                          {!p.hasActiveProduct && !p.accountDeleted && (
+                            <span className="flex items-center gap-1 text-xs text-gold ml-1" title="Kein aktives, passendes Produkt hinterlegt">
+                              <AlertTriangle size={12} /> kein aktives Produkt
+                            </span>
+                          )}
+                          {p.availableProducts?.length > 0 && (
+                            <select
+                              defaultValue={p.customerProductId ?? ""}
+                              onChange={(e) => saveBookingProduct(p.bookingId, e.target.value)}
+                              className="text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory"
+                            >
+                              <option value="">Produkt zuordnen…</option>
+                              {p.availableProducts.map((prod: any) => <option key={prod.id} value={prod.id}>{prod.name}</option>)}
+                            </select>
+                          )}
+                          <input
+                            placeholder="Kommentar (z.B. Zahlung fehlt)"
+                            defaultValue={p.notes}
+                            onBlur={(e) => { if (e.target.value !== p.notes) saveBookingNote(p.bookingId, e.target.value); }}
+                            className="text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory w-56"
+                          />
+                          <button onClick={() => cancelBooking(p.bookingId, p.name)} className="ml-auto text-xs text-wine underline">Stornieren</button>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {waitlist.length > 0 && (
+                      <div className="mt-5">
+                        <h4 className="text-xs uppercase tracking-wide text-gold mb-2">Warteliste ({waitlist.length})</h4>
+                        <ul className="text-sm text-ivory space-y-1.5">
+                          {waitlist.map((p: any, i: number) => (
+                            <li key={i} className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs text-muted w-5">{i + 1}.</span>
+                              {p.name} <span className="text-muted">— {p.email}</span>
+                              {p.source === "enrollment" && (
+                                <span className="text-xs px-2 py-0.5 rounded-full border border-gold text-gold">Fest zugeteilt</span>
+                              )}
+                              <button onClick={() => promoteBooking(p.bookingId)} className="ml-auto text-xs text-gold underline">Bestätigen</button>
+                              <button onClick={() => cancelBooking(p.bookingId, p.name)} className="text-xs text-wine underline">Entfernen</button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {rosterEditingFor === selectedSession.id && (
+                  <div className="mt-5 p-4 rounded-xl bg-bg border border-border space-y-3">
+                    <h4 className="text-sm text-ivory font-medium">Teilnehmer verwalten</h4>
+                    <ul className="space-y-1.5">
+                      {rosterEntries.map((entry) => (
+                        <li key={entry.key} className="flex items-center gap-2 flex-wrap text-xs">
+                          <span className="text-ivory">{entry.name}</span>
+                          <span className="text-muted">{entry.email}</span>
                           <select
-                            defaultValue={p.customerProductId ?? ""}
-                            onChange={(e) => saveBookingProduct(p.bookingId, e.target.value)}
-                            className="text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory"
+                            value={entry.targetStatus}
+                            onChange={(e) => updateRosterEntry(entry.key, e.target.value)}
+                            className="ml-auto px-2 py-1 rounded-lg bg-surface border border-border text-ivory"
                           >
-                            <option value="">Produkt zuordnen…</option>
-                            {p.availableProducts.map((prod: any) => <option key={prod.id} value={prod.id}>{prod.name}</option>)}
+                            <option value="confirmed">Bestätigt</option>
+                            <option value="waitlisted">Warteliste</option>
+                            <option value="removed">Entfernen</option>
                           </select>
-                        )}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="pt-2 border-t border-border space-y-2">
+                      <p className="text-xs text-muted">Person hinzufügen:</p>
+                      <div className="relative">
                         <input
-                          placeholder="Kommentar (z.B. Zahlung fehlt)"
-                          defaultValue={p.notes}
-                          onBlur={(e) => { if (e.target.value !== p.notes) saveBookingNote(p.bookingId, e.target.value); }}
-                          className="ml-auto text-xs px-2 py-1 rounded-lg bg-bg border border-border text-ivory w-56"
+                          placeholder="Schüler:in suchen (Name oder E-Mail)…"
+                          value={rosterSearch}
+                          onChange={(e) => setRosterSearch(e.target.value)}
+                          className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs w-72"
                         />
-                      </li>
-                    ))}
-                  </ul>
+                        {rosterSearch.trim().length > 0 && (
+                          <div className="absolute top-full mt-1 left-0 z-10 w-72 max-h-48 overflow-y-auto rounded-lg border border-border bg-surface shadow-xl">
+                            {customers
+                              .filter((c) =>
+                                c.name.toLowerCase().includes(rosterSearch.trim().toLowerCase()) ||
+                                c.email.toLowerCase().includes(rosterSearch.trim().toLowerCase())
+                              )
+                              .filter((c) => !rosterEntries.some((e) => e.email === c.email))
+                              .slice(0, 8)
+                              .map((c) => (
+                                <button
+                                  key={c.id}
+                                  onClick={() => { addExistingToRoster(c.id); setRosterSearch(""); }}
+                                  className="block w-full text-left px-3 py-2 text-xs text-ivory hover:bg-bg"
+                                >
+                                  {c.name} <span className="text-muted">— {c.email}</span>
+                                </button>
+                              ))}
+                            {customers.filter((c) =>
+                              c.name.toLowerCase().includes(rosterSearch.trim().toLowerCase()) ||
+                              c.email.toLowerCase().includes(rosterSearch.trim().toLowerCase())
+                            ).length === 0 && (
+                              <p className="px-3 py-2 text-xs text-muted">Keine Treffer — unten neu anlegen.</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <span className="text-xs text-muted">Neue Person (noch nicht im System):</span>
+                        <input placeholder="Name" value={rosterNewName} onChange={(e) => setRosterNewName(e.target.value)} className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs w-32" />
+                        <input placeholder="E-Mail" value={rosterNewEmail} onChange={(e) => setRosterNewEmail(e.target.value)} className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs w-40" />
+                        <button onClick={addNewToRoster} className="px-3 py-1.5 rounded-full text-xs border border-border text-gold">Hinzufügen</button>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 pt-2">
+                      <button onClick={() => submitRoster(selectedSession)} disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                        {saving ? "Speichere…" : "Save"}
+                      </button>
+                      <button onClick={() => setRosterEditingFor(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                    </div>
+                  </div>
                 )}
               </div>
-            )}
+              );
+            })()}
           </div>
         );
       })()}
@@ -1384,14 +1656,16 @@ export default function AdminPage() {
         const todayStr = formatDateOnly(today);
         const alerts: { severity: "rot" | "gelb"; type: string; message: string; key: string }[] = [];
         sessions.forEach((s) => {
-          if (s.participants.length > s.capacity) {
+          const confirmedN = confirmedCount(s);
+          if (confirmedN > s.capacity) {
             alerts.push({
               severity: "rot", type: "Überbuchung",
-              message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): ${s.participants.length}/${s.capacity} Plätze belegt`,
+              message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): ${confirmedN}/${s.capacity} Plätze belegt`,
               key: `ob-${s.id}`,
             });
           }
-          if (!s.cancelled && s.date < todayStr && s.participants.some((p: any) => p.attended === null || p.attended === undefined)) {
+          const confirmedParticipants = s.participants.filter((p: any) => p.status === "confirmed");
+          if (!s.cancelled && s.date < todayStr && confirmedParticipants.some((p: any) => p.attended === null || p.attended === undefined)) {
             alerts.push({
               severity: "gelb", type: "Anwesenheit fehlt",
               message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): Anwesenheit noch nicht vollständig erfasst`,
@@ -1402,7 +1676,7 @@ export default function AdminPage() {
             if (p.notes) {
               alerts.push({ severity: "gelb", type: "Kommentar", message: `${p.name} – ${s.courseName} (${s.date}): "${p.notes}"`, key: `note-${s.id}-${i}` });
             }
-            if (!p.hasActiveProduct && !p.accountDeleted) {
+            if (p.status === "confirmed" && !p.hasActiveProduct && !p.accountDeleted) {
               alerts.push({ severity: "gelb", type: "Kein aktives Produkt", message: `${p.name} – ${s.courseName} (${s.date})`, key: `prod-${s.id}-${i}` });
             }
           });
@@ -1433,6 +1707,81 @@ export default function AdminPage() {
           </div>
         );
       })()}
+
+      {tab === "log" && (
+        <div className="space-y-4">
+          <div className="rounded-2xl p-4 border border-border bg-surface grid sm:grid-cols-5 gap-2 items-end">
+            <Field label="Von">
+              <input type="date" value={logFilter.from} onChange={(e) => setLogFilter({ ...logFilter, from: e.target.value })} className={`w-full ${inputClass}`} />
+            </Field>
+            <Field label="Bis">
+              <input type="date" value={logFilter.to} onChange={(e) => setLogFilter({ ...logFilter, to: e.target.value })} className={`w-full ${inputClass}`} />
+            </Field>
+            <Field label="Bearbeiter:in">
+              <select value={logFilter.adminId} onChange={(e) => setLogFilter({ ...logFilter, adminId: e.target.value })} className={`w-full ${inputClass}`}>
+                <option value="">Alle</option>
+                {logAdmins.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Bereich">
+              <select value={logFilter.entityType} onChange={(e) => setLogFilter({ ...logFilter, entityType: e.target.value })} className={`w-full ${inputClass}`}>
+                <option value="">Alle</option>
+                <option value="course">Kurse</option>
+                <option value="customer">Schüler:innen</option>
+                <option value="customer_product">Produktzuweisungen</option>
+                <option value="product">Produkte</option>
+                <option value="course_access">Freigaben</option>
+                <option value="enrollment">Feste Zuteilung</option>
+                <option value="session">Termine</option>
+                <option value="booking">Buchungen</option>
+                <option value="session_roster">Teilnehmerlisten</option>
+                <option value="trainer">Trainer:innen</option>
+              </select>
+            </Field>
+            <Field label="Suche (Beschreibung)">
+              <input placeholder="z.B. Kursname" value={logFilter.search} onChange={(e) => setLogFilter({ ...logFilter, search: e.target.value })} className={`w-full ${inputClass}`} />
+            </Field>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={loadLog} disabled={logLoading} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+              {logLoading ? "Lade…" : "Filtern"}
+            </button>
+            <button onClick={exportLog} className="px-4 py-2 rounded-full text-sm border border-gold text-gold">Als Excel exportieren</button>
+          </div>
+          {logEntries.length === 0 ? (
+            <p className="text-sm text-muted">Keine Einträge{logLoading ? "…" : " für diese Filter."}</p>
+          ) : (
+            <div className="rounded-2xl border border-border bg-surface overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-muted border-b border-border">
+                    <th className="px-3 py-2 font-normal">Zeitstempel</th>
+                    <th className="px-3 py-2 font-normal">Bearbeiter</th>
+                    <th className="px-3 py-2 font-normal">Aktion</th>
+                    <th className="px-3 py-2 font-normal">Bereich</th>
+                    <th className="px-3 py-2 font-normal">Beschreibung</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logEntries.map((e: any) => (
+                    <tr key={e.id} className="border-b border-border last:border-0">
+                      <td className="px-3 py-2 text-muted whitespace-nowrap">{new Date(e.created_at).toLocaleString("de-DE")}</td>
+                      <td className="px-3 py-2 text-ivory whitespace-nowrap">{e.admin_name}</td>
+                      <td className="px-3 py-2 text-gold whitespace-nowrap">{e.action}</td>
+                      <td className="px-3 py-2 text-muted whitespace-nowrap">{e.entity_type}</td>
+                      <td className="px-3 py-2 text-ivory">{e.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-xs text-muted">
+            Dieser Log ist unveränderlich — es gibt keine Möglichkeit, Einträge über die App zu bearbeiten oder zu löschen.
+            Angezeigt werden maximal die letzten 1000 Einträge (Export bis 5000).
+          </p>
+        </div>
+      )}
 
       {confirmDialog && (
         <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: "#0A0910CC" }}>

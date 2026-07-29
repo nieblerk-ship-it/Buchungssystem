@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { canBookCourse } from "@/lib/eligibility";
+import { statusForNewBooking } from "@/lib/waitlist";
 
 // POST /api/bookings
 // body: { courseSessionId: string, name: string, email: string }
-// Legt Kund:in an (falls neu) und bucht sie direkt für den Termin,
-// sofern noch Platz frei ist, sie/er dafür berechtigt ist. Keine Zahlung,
-// keine Bestätigungs-Mail (noch).
+// Legt Kund:in an (falls neu) und bucht sie für den Termin — direkt, solange
+// noch Kapazität frei ist, sonst automatisch auf die Warteliste (nach
+// Buchungszeitpunkt). Keine Zahlung, keine Bestätigungs-Mail (noch).
 export async function POST(req: Request) {
   const db = supabaseAdmin();
   const { courseSessionId, name, email } = await req.json();
@@ -29,15 +30,6 @@ export async function POST(req: Request) {
   }
 
   const capacity = session.capacity_override ?? (session.course as any)?.capacity ?? 0;
-  const { count } = await db
-    .from("bookings")
-    .select("id", { count: "exact", head: true })
-    .eq("course_session_id", courseSessionId)
-    .eq("status", "confirmed");
-
-  if ((count ?? 0) >= capacity) {
-    return NextResponse.json({ error: "Dieser Termin ist bereits ausgebucht." }, { status: 409 });
-  }
 
   // Kund:in finden oder anlegen
   const { data: existing } = await db
@@ -61,13 +53,13 @@ export async function POST(req: Request) {
     customerId = created.id;
   }
 
-  // Doppelbuchung für denselben Termin verhindern
+  // Doppelbuchung für denselben Termin verhindern (egal ob bestätigt oder auf Warteliste)
   const { data: dup } = await db
     .from("bookings")
     .select("id")
     .eq("course_session_id", courseSessionId)
     .eq("customer_id", customerId)
-    .eq("status", "confirmed")
+    .in("status", ["confirmed", "waitlisted"])
     .maybeSingle();
 
   if (dup) {
@@ -85,13 +77,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: eligibility.reason }, { status: 403 });
   }
 
+  const status = await statusForNewBooking(db, courseSessionId, capacity);
+
   const { data: booking, error: bookingErr } = await db
     .from("bookings")
-    .insert({ customer_id: customerId, course_session_id: courseSessionId, status: "confirmed" })
+    .insert({ customer_id: customerId, course_session_id: courseSessionId, status, source: "self" })
     .select("id")
     .single();
 
   if (bookingErr) return NextResponse.json({ error: bookingErr.message }, { status: 500 });
 
-  return NextResponse.json({ bookingId: booking.id, courseName: (session.course as any)?.name });
+  return NextResponse.json({ bookingId: booking.id, courseName: (session.course as any)?.name, status });
 }
