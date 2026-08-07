@@ -252,6 +252,25 @@ ADMIN_SESSION_SECRET=irgendein-anderer-langer-zufaelliger-text
   jeder Änderung) und zu lesen.
 - `npm install` nötig (neue Abhängigkeit `xlsx` für den Excel-Export).
 
+## Phase E1 – Kursbezeichnungen & Anlegen im Kalender (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_13_course_types.sql`
+(überführt bestehende Kurse automatisch in Bezeichnungen — nichts geht verloren)
+
+- **Kursbezeichnung und Kurs-Instanz sind jetzt getrennt.** Dieselbe Bezeichnung
+  (z.B. "Beginner 2/3") kann mehrfach existieren — in verschiedenen Räumen, zu
+  verschiedenen Zeiten, mit verschiedenen Trainerinnen.
+- Der Reiter **"Kurse verwalten" ist entfallen.** Kurse werden jetzt direkt im
+  Reiter **Anmeldungen** über das **"+"** rechts neben der KW-Anzeige angelegt.
+  Das Formular öffnet sich unter dem Kalender; du kannst weiter im Kalender
+  navigieren, und ein angeklickter Termin öffnet sich darunter.
+- Beim Anlegen wählst du eine bestehende Bezeichnung aus dem Dropdown **oder**
+  trägst eine komplett neue als Freitext ein (wird dann automatisch als neue
+  Bezeichnung gespeichert und steht künftig im Dropdown).
+- Neue Auswahl **Einzeltermin** vs. **Regelmäßiger Termin**: Einzeltermin
+  braucht nur ein Datum, regelmäßiger Termin Wochentag + Start- und Enddatum.
+  Die Termine werden für genau diesen Zeitraum erzeugt.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 

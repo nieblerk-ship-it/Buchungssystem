@@ -18,8 +18,10 @@ const COURSE_CATEGORIES = ["Pole", "Exotic Pole", "Openclass", "Conditioning", "
 const ROOMS = ["OC", "Raum 1", "Raum 2", "Raum 3"];
 
 const EMPTY_COURSE = {
-  name: "", category: "Pole", level: "", instructor: "", room: ROOMS[0], trainer_id: "",
-  weekday: 1, start_time: "18:00", duration_minutes: 70, capacity: 8, notes: "",
+  courseTypeId: "", newTypeName: "", category: "Pole", level: "", instructor: "",
+  room: ROOMS[0], trainer_id: "", isSingle: false, singleDate: "",
+  weekday: 1, startDate: "", endDate: "",
+  start_time: "18:00", duration_minutes: 70, capacity: 8, notes: "",
 };
 const EMPTY_CUSTOMER = { name: "", email: "", phone: "", level: "", notes: "" };
 const EMPTY_PRODUCT = {
@@ -88,7 +90,7 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "kurse" | "schueler" | "produkte" | "meldungen" | "trainer" | "log">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [trainers, setTrainers] = useState<any[]>([]);
   const [newTrainer, setNewTrainer] = useState({ name: "", email: "", newPassword: "" });
@@ -112,6 +114,8 @@ export default function AdminPage() {
   const [products, setProducts] = useState<any[]>([]);
 
   const [newCourse, setNewCourse] = useState<any>(EMPTY_COURSE);
+  const [showCourseForm, setShowCourseForm] = useState(false);
+  const [courseTypes, setCourseTypes] = useState<any[]>([]);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [editCourse, setEditCourse] = useState<any>(null);
 
@@ -170,7 +174,7 @@ export default function AdminPage() {
   const [logLoading, setLogLoading] = useState(false);
 
   async function loadAll() {
-    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers()]);
+    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes()]);
   }
 
   useEffect(() => {
@@ -248,6 +252,11 @@ export default function AdminPage() {
     const res = await fetch(`/api/admin/trainers`);
     const data = await res.json();
     if (res.ok) setTrainers(data.trainers);
+  }
+  async function loadCourseTypes() {
+    const res = await fetch(`/api/admin/course-types`);
+    const data = await res.json();
+    if (res.ok) setCourseTypes(data.courseTypes);
   }
   async function loadLog() {
     setLogLoading(true);
@@ -407,7 +416,8 @@ export default function AdminPage() {
     setSaving(false);
     if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
     setNewCourse(EMPTY_COURSE);
-    await loadCourses(); await loadSessions();
+    setShowCourseForm(false);
+    await loadCourses(); await loadSessions(); await loadCourseTypes();
   }
   function startEditCourse(c: any) { setEditingCourseId(c.id); setEditCourse({ ...c }); }
   async function saveEditCourse() {
@@ -843,7 +853,6 @@ export default function AdminPage() {
       <nav className="flex gap-1 mb-8 flex-wrap">
         {[
           { id: "anmeldungen", label: "Anmeldungen" },
-          { id: "kurse", label: "Kurse verwalten" },
           { id: "schueler", label: "Schüler:innen" },
           { id: "produkte", label: "Produkte" },
           { id: "trainer", label: "Trainer:innen" },
@@ -931,6 +940,18 @@ export default function AdminPage() {
               >
                 <ChevronRight size={16} />
               </button>
+              <button
+                onClick={() => {
+                  setShowCourseForm((v) => !v);
+                  if (!showCourseForm) {
+                    setNewCourse({ ...EMPTY_COURSE, startDate: formatDateOnly(weekStart), endDate: formatDateOnly(addDays(weekStart, 6)), singleDate: formatDateOnly(weekStart) });
+                  }
+                }}
+                className={`ml-2 w-9 h-9 rounded-full border flex items-center justify-center text-lg ${showCourseForm ? "bg-gold text-bg border-gold" : "border-gold text-gold"}`}
+                title="Neuen Kurs anlegen"
+              >
+                +
+              </button>
             </div>
 
             <div className="overflow-x-auto" onClick={() => showPicker && setShowPicker(false)}>
@@ -974,6 +995,128 @@ export default function AdminPage() {
                 })}
               </div>
             </div>
+
+            {showCourseForm && (
+              <form onSubmit={createCourse} className="mt-8 rounded-2xl p-5 border border-gold bg-surface space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display text-lg text-ivory">Neuen Kurs anlegen</h3>
+                  <button type="button" onClick={() => setShowCourseForm(false)} className="text-xs text-muted underline">Schließen</button>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <Field label="Kursbezeichnung (bestehende wählen)">
+                    <select
+                      value={newCourse.courseTypeId}
+                      onChange={(e) => {
+                        const ct = courseTypes.find((t: any) => t.id === e.target.value);
+                        setNewCourse({
+                          ...newCourse,
+                          courseTypeId: e.target.value,
+                          newTypeName: "",
+                          category: ct?.category ?? newCourse.category,
+                          level: ct?.default_level ?? "",
+                          capacity: ct?.default_capacity ?? newCourse.capacity,
+                          duration_minutes: ct?.default_duration_minutes ?? newCourse.duration_minutes,
+                        });
+                      }}
+                      className={`w-full ${inputClass}`}
+                    >
+                      <option value="">— neue Bezeichnung eintragen —</option>
+                      {courseTypes.filter((t: any) => t.active).map((t: any) => (
+                        <option key={t.id} value={t.id}>{t.name} ({t.category})</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="…oder neue Bezeichnung (Freitext)">
+                    <input
+                      placeholder="z.B. Beginner 2/3"
+                      value={newCourse.newTypeName}
+                      onChange={(e) => setNewCourse({ ...newCourse, newTypeName: e.target.value, courseTypeId: "" })}
+                      className={`w-full ${inputClass}`}
+                    />
+                  </Field>
+                  <Field label="Kategorie">
+                    <select value={newCourse.category} onChange={(e) => setNewCourse({ ...newCourse, category: e.target.value })} className={`w-full ${inputClass}`}>
+                      {COURSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Level (optional)">
+                    <input placeholder="z.B. Level 2" value={newCourse.level} onChange={(e) => setNewCourse({ ...newCourse, level: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Raum">
+                    <select value={newCourse.room} onChange={(e) => setNewCourse({ ...newCourse, room: e.target.value })} className={`w-full ${inputClass}`}>
+                      {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Trainer-Konto (optional)">
+                    <select value={newCourse.trainer_id} onChange={(e) => setNewCourse({ ...newCourse, trainer_id: e.target.value })} className={`w-full ${inputClass}`}>
+                      <option value="">keins</option>
+                      {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Trainer:in-Anzeigename (optional, Freitext)">
+                    <input placeholder="z.B. Nina" value={newCourse.instructor} onChange={(e) => setNewCourse({ ...newCourse, instructor: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Startzeit (Std:Min)">
+                    <input required type="time" value={newCourse.start_time} onChange={(e) => setNewCourse({ ...newCourse, start_time: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Dauer (Minuten)">
+                    <input type="number" value={newCourse.duration_minutes} onChange={(e) => setNewCourse({ ...newCourse, duration_minutes: Number(e.target.value) })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Kapazität (Anzahl Plätze)">
+                    <input required type="number" value={newCourse.capacity} onChange={(e) => setNewCourse({ ...newCourse, capacity: Number(e.target.value) })} className={`w-full ${inputClass}`} />
+                  </Field>
+                </div>
+
+                <div className="pt-3 border-t border-border space-y-3">
+                  <div className="flex gap-2">
+                    {[
+                      { v: false, label: "Regelmäßiger Termin" },
+                      { v: true, label: "Einzeltermin" },
+                    ].map((o) => (
+                      <button
+                        type="button"
+                        key={String(o.v)}
+                        onClick={() => setNewCourse({ ...newCourse, isSingle: o.v })}
+                        className={`px-4 py-2 text-sm rounded-full ${newCourse.isSingle === o.v ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {newCourse.isSingle ? (
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <Field label="Datum des Einzeltermins">
+                        <input required type="date" value={newCourse.singleDate} onChange={(e) => setNewCourse({ ...newCourse, singleDate: e.target.value })} className={`w-full ${inputClass}`} />
+                      </Field>
+                    </div>
+                  ) : (
+                    <div className="grid sm:grid-cols-3 gap-3">
+                      <Field label="Wochentag">
+                        <select value={newCourse.weekday} onChange={(e) => setNewCourse({ ...newCourse, weekday: Number(e.target.value) })} className={`w-full ${inputClass}`}>
+                          {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Startdatum">
+                        <input required type="date" value={newCourse.startDate} onChange={(e) => setNewCourse({ ...newCourse, startDate: e.target.value })} className={`w-full ${inputClass}`} />
+                      </Field>
+                      <Field label="Enddatum">
+                        <input required type="date" value={newCourse.endDate} onChange={(e) => setNewCourse({ ...newCourse, endDate: e.target.value })} className={`w-full ${inputClass}`} />
+                      </Field>
+                    </div>
+                  )}
+                </div>
+
+                <Field label="Notizen (optional)">
+                  <textarea value={newCourse.notes} onChange={(e) => setNewCourse({ ...newCourse, notes: e.target.value })} className={`w-full ${inputClass}`} />
+                </Field>
+
+                <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                  {saving ? "Speichere…" : "Kurs anlegen"}
+                </button>
+              </form>
+            )}
 
             {selectedSession && (() => {
               const confirmed = selectedSession.participants.filter((p: any) => p.status === "confirmed");
@@ -1155,100 +1298,6 @@ export default function AdminPage() {
           </div>
         );
       })()}
-
-      {tab === "kurse" && (
-        <div className="space-y-8">
-          <form onSubmit={createCourse} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
-            <h3 className="font-display text-lg text-ivory mb-2">Neuen Kurs anlegen</h3>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Field label="Kursname"><input required placeholder="z.B. Beginner 1" value={newCourse.name} onChange={(e) => setNewCourse({ ...newCourse, name: e.target.value })} className={`w-full ${inputClass}`} /></Field>
-              <Field label="Level (optional)"><input placeholder="z.B. Level 1" value={newCourse.level} onChange={(e) => setNewCourse({ ...newCourse, level: e.target.value })} className={`w-full ${inputClass}`} /></Field>
-              <Field label="Kategorie">
-                <select required value={newCourse.category} onChange={(e) => setNewCourse({ ...newCourse, category: e.target.value })} className={`w-full ${inputClass}`}>
-                  {COURSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </Field>
-              <Field label="Trainer:in-Anzeigename (optional, Freitext)"><input placeholder="z.B. Nina" value={newCourse.instructor} onChange={(e) => setNewCourse({ ...newCourse, instructor: e.target.value })} className={`w-full ${inputClass}`} /></Field>
-              <Field label="Raum">
-                <select value={newCourse.room} onChange={(e) => setNewCourse({ ...newCourse, room: e.target.value })} className={`w-full ${inputClass}`}>
-                  {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
-                </select>
-              </Field>
-              <Field label="Trainer-Konto (für Login-Zugriff, optional)">
-                <select value={newCourse.trainer_id} onChange={(e) => setNewCourse({ ...newCourse, trainer_id: e.target.value })} className={`w-full ${inputClass}`}>
-                  <option value="">Trainer-Konto: keins</option>
-                  {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>Konto: {t.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Wochentag">
-                <select value={newCourse.weekday} onChange={(e) => setNewCourse({ ...newCourse, weekday: Number(e.target.value) })} className={`w-full ${inputClass}`}>
-                  {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
-                </select>
-              </Field>
-              <Field label="Startzeit (Std:Min)"><input required type="time" value={newCourse.start_time} onChange={(e) => setNewCourse({ ...newCourse, start_time: e.target.value })} className={`w-full ${inputClass}`} /></Field>
-              <Field label="Dauer (Minuten)"><input type="number" placeholder="z.B. 70" value={newCourse.duration_minutes} onChange={(e) => setNewCourse({ ...newCourse, duration_minutes: Number(e.target.value) })} className={`w-full ${inputClass}`} /></Field>
-              <Field label="Kapazität (Anzahl Plätze)"><input required type="number" placeholder="z.B. 8" value={newCourse.capacity} onChange={(e) => setNewCourse({ ...newCourse, capacity: Number(e.target.value) })} className={`w-full ${inputClass}`} /></Field>
-            </div>
-            <Field label="Notizen (optional)"><textarea placeholder="z.B. Hinweise für Trainerinnen" value={newCourse.notes} onChange={(e) => setNewCourse({ ...newCourse, notes: e.target.value })} className={`w-full ${inputClass}`} /></Field>
-            <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
-              {saving ? "Speichere…" : "Kurs anlegen"}
-            </button>
-          </form>
-
-          <div className="space-y-3">
-            <h3 className="font-display text-lg text-ivory">Bestehende Kurse</h3>
-            {courses.map((c) => (
-              <div key={c.id} className="rounded-2xl p-5 border border-border bg-surface">
-                {editingCourseId === c.id ? (
-                  <div className="space-y-3">
-                    <div className="grid sm:grid-cols-2 gap-3">
-                      <input value={editCourse.name} onChange={(e) => setEditCourse({ ...editCourse, name: e.target.value })} className={inputClass} />
-                      <input value={editCourse.level ?? ""} onChange={(e) => setEditCourse({ ...editCourse, level: e.target.value })} placeholder="Level" className={inputClass} />
-                      <select value={editCourse.category} onChange={(e) => setEditCourse({ ...editCourse, category: e.target.value })} className={inputClass}>
-                        {COURSE_CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
-                      </select>
-                      <input value={editCourse.instructor ?? ""} onChange={(e) => setEditCourse({ ...editCourse, instructor: e.target.value })} placeholder="Trainer:in" className={inputClass} />
-                      <select value={editCourse.room ?? ROOMS[0]} onChange={(e) => setEditCourse({ ...editCourse, room: e.target.value })} className={inputClass}>
-                        {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
-                      </select>
-                      <select value={editCourse.trainer_id ?? ""} onChange={(e) => setEditCourse({ ...editCourse, trainer_id: e.target.value || null })} className={inputClass}>
-                        <option value="">Trainer-Konto: keins</option>
-                        {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>Konto: {t.name}</option>)}
-                      </select>
-                      <select value={editCourse.weekday} onChange={(e) => setEditCourse({ ...editCourse, weekday: Number(e.target.value) })} className={inputClass}>
-                        {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
-                      </select>
-                      <input type="time" value={editCourse.start_time} onChange={(e) => setEditCourse({ ...editCourse, start_time: e.target.value })} className={inputClass} />
-                      <input type="number" value={editCourse.duration_minutes} onChange={(e) => setEditCourse({ ...editCourse, duration_minutes: Number(e.target.value) })} className={inputClass} />
-                      <input type="number" value={editCourse.capacity} onChange={(e) => setEditCourse({ ...editCourse, capacity: Number(e.target.value) })} className={inputClass} />
-                    </div>
-                    <p className="text-xs text-muted">
-                      Bei Änderung von Wochentag/Uhrzeit wirst du vor dem Speichern nochmal gefragt.
-                    </p>
-                    <div className="flex gap-2">
-                      <button onClick={saveEditCourse} disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">{saving ? "Speichere…" : "Speichern"}</button>
-                      <button onClick={() => setEditingCourseId(null)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div>
-                      <h4 className="font-display text-lg text-ivory">{c.name} {c.level ? `– ${c.level}` : ""} {!c.active && <span className="text-xs text-wine">(inaktiv)</span>}</h4>
-                      <p className="text-xs text-muted mt-1">
-                        {WEEKDAYS.find((w) => w.value === c.weekday)?.label} · {c.start_time?.slice(0, 5)} Uhr · {c.duration_minutes} Min · Kapazität {c.capacity} · {c.category}{c.room ? ` · ${c.room}` : ""}{c.instructor ? ` · ${c.instructor}` : ""}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => startEditCourse(c)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">Bearbeiten</button>
-                      {c.active && <button onClick={() => deactivateCourse(c.id, c.name)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">Deaktivieren</button>}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {tab === "schueler" && (
         <div className="space-y-8">
