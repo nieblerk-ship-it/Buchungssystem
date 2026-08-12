@@ -71,22 +71,32 @@ export default function Home() {
   const [showPicker, setShowPicker] = useState(false);
   const [pickerMonth, setPickerMonth] = useState<Date>(new Date(today.getFullYear(), today.getMonth(), 1));
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/courses");
-        const data = await res.json();
-        if (!res.ok) {
-          setLoadError(data.error ?? "Kurse konnten nicht geladen werden.");
-        } else {
-          setSessions(data.sessions ?? []);
-        }
-      } catch {
-        setLoadError("Kurse konnten nicht geladen werden.");
+  async function load() {
+    try {
+      // cache: "no-store" stellt sicher, dass immer der aktuelle Stand geladen
+      // wird — sonst könnten neu angelegte Kurse aus dem Browser-Cache fehlen.
+      const res = await fetch("/api/courses", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) {
+        setLoadError(data.error ?? "Kurse konnten nicht geladen werden.");
+      } else {
+        setSessions(data.sessions ?? []);
+        setLoadError(null);
       }
-      setLoading(false);
+    } catch {
+      setLoadError("Kurse konnten nicht geladen werden.");
     }
+    setLoading(false);
+  }
+
+  useEffect(() => {
     load();
+    // Beim Zurückkehren auf den Tab neu laden, damit Änderungen aus dem
+    // Admin-Bereich ohne manuelles Neuladen sichtbar werden.
+    function onFocus() { load(); }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
@@ -254,6 +264,12 @@ export default function Home() {
       <main className="relative z-10 px-6 md:px-12 pb-24 max-w-6xl mx-auto" onClick={() => showPicker && setShowPicker(false)}>
         {loading && <p className="text-center text-muted">Lade Kursplan…</p>}
         {loadError && <p className="text-center text-wine text-sm">{loadError}</p>}
+
+        {!loading && !loadError && weekDays.every((d) => (sessionsByDate[formatDateOnly(d)] ?? []).length === 0) && (
+          <p className="text-center text-muted text-sm mb-6">
+            In dieser Woche sind keine Kurse eingetragen. Nutz die Pfeile oder das KW-Feld oben, um andere Wochen anzusehen.
+          </p>
+        )}
 
         {!loading && !loadError && (
           <div className="overflow-x-auto">

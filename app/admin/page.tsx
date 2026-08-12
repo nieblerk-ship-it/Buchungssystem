@@ -115,6 +115,7 @@ export default function AdminPage() {
 
   const [newCourse, setNewCourse] = useState<any>(EMPTY_COURSE);
   const [showCourseForm, setShowCourseForm] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
   const [courseTypes, setCourseTypes] = useState<any[]>([]);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [editCourse, setEditCourse] = useState<any>(null);
@@ -127,7 +128,7 @@ export default function AdminPage() {
 
   const [accessPanelFor, setAccessPanelFor] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<any[]>([]);
-  const [overrideForm, setOverrideForm] = useState<any>({ courseId: "", access: "allow", notes: "" });
+  const [overrideForm, setOverrideForm] = useState<any>({ courseTypeId: "", access: "allow", notes: "" });
 
   const [historyForCustomerId, setHistoryForCustomerId] = useState<string | null>(null);
   const [historyBookings, setHistoryBookings] = useState<any[]>([]);
@@ -446,16 +447,72 @@ export default function AdminPage() {
     setEditingCourseId(null);
     await loadCourses(); await loadSessions();
   }
-  function deactivateCourse(id: string, name: string) {
+  const [editCoursePanel, setEditCoursePanel] = useState<any>(null);
+
+  function openEditCourse(s: any) {
+    setEditCoursePanel({
+      id: s.courseId,
+      courseTypeId: s.courseTypeId ?? "",
+      newTypeName: "",
+      category: s.courseCategory ?? "Pole",
+      level: s.courseLevel ?? "",
+      instructor: s.courseInstructor ?? "",
+      room: s.room ?? ROOMS[0],
+      trainer_id: s.courseTrainerId ?? "",
+      weekday: s.courseWeekday ?? 1,
+      start_time: s.time?.slice(0, 5) ?? "18:00",
+      duration_minutes: s.courseDuration ?? 70,
+      capacity: s.capacity ?? 8,
+      endDate: s.courseEndDate ?? "",
+      isSingle: s.courseIsSingle ?? false,
+      sessionDate: s.date,
+      applyMode: "all",
+    });
+  }
+
+  async function saveEditCoursePanel() {
+    if (!editCoursePanel) return;
+    setSaving(true); setActionError(null);
+    const { id, isSingle, sessionDate, applyMode, ...rest } = editCoursePanel;
+    const res = await fetch("/api/admin/courses", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, ...rest, splitFrom: applyMode === "from" ? sessionDate : undefined }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setEditCoursePanel(null);
+    setSelectedSessionId(null);
+    await loadCourses(); await loadSessions(); await loadCourseTypes();
+  }
+
+  function endCourse(id: string, name: string) {
     askConfirm(
-      "Kurs deaktivieren",
-      `Kurs "${name}" deaktivieren? Er verschwindet von der Buchungsseite, bestehende Termine und Buchungen bleiben erhalten.`,
-      "Deaktivieren",
+      "Kurs beenden",
+      `Kurs "${name}" ab heute beenden? Alle KÜNFTIGEN Termine dieser Kursreihe werden samt ihrer Buchungen entfernt. Bereits stattgefundene Termine bleiben vollständig erhalten und weiterhin dokumentiert. Für einen einzelnen Ausfall stattdessen "Termin absagen" nutzen.`,
+      "Kurs beenden",
       async () => {
         setActionError(null);
-        const res = await fetch(`/api/admin/courses?id=${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/admin/courses?id=${id}&mode=end`, { method: "DELETE" });
         if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
-        await loadCourses();
+        setSelectedSessionId(null);
+        await loadCourses(); await loadSessions();
+      },
+      true
+    );
+  }
+
+  function purgeCourse(id: string, name: string) {
+    askConfirm(
+      "Kurs vollständig löschen",
+      `Kurs "${name}" unwiderruflich löschen? Das entfernt den Kurs samt allen Terminen komplett aus dem System. Das ist nur möglich, wenn es noch keine bereits stattgefundenen Termine mit Buchungen gibt — sonst würde dokumentierte Vergangenheit verloren gehen, und du bekommst stattdessen einen Hinweis.`,
+      "Endgültig löschen",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/courses?id=${id}&mode=purge`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        setSelectedSessionId(null);
+        await loadCourses(); await loadSessions();
       },
       true
     );
@@ -631,7 +688,7 @@ export default function AdminPage() {
   async function openAccessPanel(customerId: string) {
     setAccessPanelFor(customerId);
     setEnrollPanelFor(null);
-    setOverrideForm({ courseId: courses.find((c) => c.active)?.id ?? "", access: "allow", notes: "" });
+    setOverrideForm({ courseTypeId: courseTypes.find((t: any) => t.active)?.id ?? "", access: "allow", notes: "" });
     const res = await fetch(`/api/admin/course-access?customerId=${customerId}`);
     const data = await res.json();
     if (res.ok) setOverrides(data.overrides);
@@ -639,10 +696,10 @@ export default function AdminPage() {
   async function submitOverride(e: React.FormEvent) {
     e.preventDefault();
     if (overrideForm.access === "deny") {
-      const course = courses.find((c) => c.id === overrideForm.courseId);
+      const ct = courseTypes.find((t: any) => t.id === overrideForm.courseTypeId);
       askConfirm(
         "Kurs sperren",
-        `Diese Person wird von der Buchung von "${course?.name ?? "diesem Kurs"}" ausgeschlossen — auch wenn ein passendes Produkt vorliegt.`,
+        `Diese Person wird von der Buchung von "${ct?.name ?? "dieser Kursbezeichnung"}" ausgeschlossen — für alle Termine dieser Bezeichnung, auch wenn ein passendes Produkt vorliegt.`,
         "Sperren",
         () => doSubmitOverride(),
         true
@@ -952,13 +1009,20 @@ export default function AdminPage() {
               >
                 +
               </button>
+              <button
+                onClick={() => setShowInactive((v) => !v)}
+                className={`ml-1 px-3 py-2 rounded-full text-xs border ${showInactive ? "bg-gold text-bg border-gold" : "border-border text-muted"}`}
+                title="Abgesagte Termine und deaktivierte Kurse ein-/ausblenden"
+              >
+                {showInactive ? "Abgesagte/beendete sichtbar" : "Abgesagte/beendete ausgeblendet"}
+              </button>
             </div>
 
             <div className="overflow-x-auto" onClick={() => showPicker && setShowPicker(false)}>
               <div className="grid grid-cols-7 gap-3 min-w-[760px]">
                 {weekDays.map((day) => {
                   const dateStr = formatDateOnly(day);
-                  const list = sessionsByDate[dateStr] ?? [];
+                  const list = (sessionsByDate[dateStr] ?? []).filter((s: any) => showInactive || (!s.cancelled && s.courseActive));
                   const isToday = isSameDay(day, today);
                   return (
                     <div key={dateStr}>
@@ -978,14 +1042,15 @@ export default function AdminPage() {
                               onClick={() => setSelectedSessionId(isSelected ? null : s.id)}
                               className={`w-full text-left rounded-xl p-3 border text-xs transition-colors ${
                                 overbooked ? "border-2 border-red-500" : isSelected ? "border-gold" : "border-border"
-                              } bg-surface ${isSelected ? "ring-1 ring-gold" : ""}`}
+                              } bg-surface ${isSelected ? "ring-1 ring-gold" : ""} ${(s.cancelled || !s.courseActive) ? "opacity-50" : ""}`}
                             >
-                              <div className="text-ivory font-medium">{s.courseName}</div>
+                              <div className={`font-medium ${(s.cancelled || !s.courseActive) ? "text-muted line-through" : "text-ivory"}`}>{s.courseName}</div>
                               {s.room && <div className="text-muted mt-0.5">{s.room}</div>}
                               <div className={`mt-1 ${overbooked ? "text-red-500 font-bold" : "text-muted"}`}>
                                 {s.time?.slice(0, 5)} · {confirmedCount(s)}/{s.capacity}{wl > 0 ? ` · ${wl} WL` : ""}{overbooked ? " ÜBERBUCHT" : ""}
                               </div>
                               {s.cancelled && <div className="text-wine mt-0.5">abgesagt</div>}
+                              {!s.courseActive && <div className="text-wine mt-0.5">Kurs beendet</div>}
                             </button>
                           );
                         })}
@@ -1118,6 +1183,123 @@ export default function AdminPage() {
               </form>
             )}
 
+            {editCoursePanel && (
+              <div className="mt-8 rounded-2xl p-5 border border-gold bg-surface space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display text-lg text-ivory">Kurs bearbeiten</h3>
+                  <button onClick={() => setEditCoursePanel(null)} className="text-xs text-muted underline">Schließen</button>
+                </div>
+                {!editCoursePanel.isSingle && (
+                  <div className="rounded-xl p-3 bg-bg border border-border space-y-2">
+                    <p className="text-xs text-muted">Ab wann sollen die Änderungen gelten?</p>
+                    <div className="flex gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setEditCoursePanel({ ...editCoursePanel, applyMode: "all" })}
+                        className={`px-4 py-2 text-sm rounded-full ${editCoursePanel.applyMode === "all" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}
+                      >
+                        Für alle künftigen Termine
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditCoursePanel({ ...editCoursePanel, applyMode: "from" })}
+                        className={`px-4 py-2 text-sm rounded-full ${editCoursePanel.applyMode === "from" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}
+                      >
+                        Erst ab dem {editCoursePanel.sessionDate}
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted">
+                      {editCoursePanel.applyMode === "from"
+                        ? `Die bisherige Kursreihe endet am Tag vor dem ${editCoursePanel.sessionDate} und bleibt mit ihrem alten Namen und Level vollständig im Kalender stehen. Ab dem ${editCoursePanel.sessionDate} läuft der Kurs mit den neuen Daten weiter — ideal für einen Level-Aufstieg. Buchungen der künftigen Termine werden übernommen.`
+                        : "Alle künftigen Termine dieser Kursreihe werden angepasst. Bereits stattgefundene Termine bleiben unverändert dokumentiert."}
+                    </p>
+                  </div>
+                )}
+
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <Field label="Kursbezeichnung (bestehende wählen)">
+                    <select
+                      value={editCoursePanel.courseTypeId}
+                      onChange={(e) => {
+                        const ct = courseTypes.find((t: any) => t.id === e.target.value);
+                        setEditCoursePanel({ ...editCoursePanel, courseTypeId: e.target.value, newTypeName: "", category: ct?.category ?? editCoursePanel.category });
+                      }}
+                      className={`w-full ${inputClass}`}
+                    >
+                      <option value="">— unverändert / neue eintragen —</option>
+                      {courseTypes.filter((t: any) => t.active).map((t: any) => (
+                        <option key={t.id} value={t.id}>{t.name} ({t.category})</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="…oder neue Bezeichnung (z.B. Level-Aufstieg)">
+                    <input
+                      placeholder="z.B. Beginner 3/4"
+                      value={editCoursePanel.newTypeName}
+                      onChange={(e) => setEditCoursePanel({ ...editCoursePanel, newTypeName: e.target.value, courseTypeId: "" })}
+                      className={`w-full ${inputClass}`}
+                    />
+                  </Field>
+                  <Field label="Kategorie">
+                    <select value={editCoursePanel.category} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, category: e.target.value })} className={`w-full ${inputClass}`}>
+                      {COURSE_CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Level (optional)">
+                    <input value={editCoursePanel.level} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, level: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Raum">
+                    <select value={editCoursePanel.room} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, room: e.target.value })} className={`w-full ${inputClass}`}>
+                      {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Trainer-Konto (optional)">
+                    <select value={editCoursePanel.trainer_id ?? ""} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, trainer_id: e.target.value })} className={`w-full ${inputClass}`}>
+                      <option value="">keins</option>
+                      {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Trainer:in-Anzeigename (Freitext)">
+                    <input value={editCoursePanel.instructor} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, instructor: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Startzeit (Std:Min)">
+                    <input type="time" value={editCoursePanel.start_time} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, start_time: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Dauer (Minuten)">
+                    <input type="number" value={editCoursePanel.duration_minutes} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, duration_minutes: Number(e.target.value) })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Kapazität (Anzahl Plätze)">
+                    <input type="number" value={editCoursePanel.capacity} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, capacity: Number(e.target.value) })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  {!editCoursePanel.isSingle && (
+                    <>
+                      <Field label="Wochentag">
+                        <select value={editCoursePanel.weekday} onChange={(e) => setEditCoursePanel({ ...editCoursePanel, weekday: Number(e.target.value) })} className={`w-full ${inputClass}`}>
+                          {WEEKDAYS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Laufzeit bis (nur Zukunft möglich)">
+                        <input
+                          type="date"
+                          min={formatDateOnly(addDays(today, 1))}
+                          value={editCoursePanel.endDate ?? ""}
+                          onChange={(e) => setEditCoursePanel({ ...editCoursePanel, endDate: e.target.value })}
+                          className={`w-full ${inputClass}`}
+                        />
+                      </Field>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button onClick={saveEditCoursePanel} disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                    {saving ? "Speichere…" : "Änderungen speichern"}
+                  </button>
+                  <button onClick={() => setEditCoursePanel(null)} className="px-5 py-2.5 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                </div>
+              </div>
+            )}
+
             {selectedSession && (() => {
               const confirmed = selectedSession.participants.filter((p: any) => p.status === "confirmed");
               const waitlist = selectedSession.participants.filter((p: any) => p.status === "waitlisted");
@@ -1141,6 +1323,15 @@ export default function AdminPage() {
                     </button>
                     <button onClick={() => toggleCancelled(selectedSession.id, !selectedSession.cancelled)} className="text-xs px-3 py-1 rounded-full border border-border text-muted">
                       {selectedSession.cancelled ? "Wieder aktivieren" : "Termin absagen"}
+                    </button>
+                    <button onClick={() => openEditCourse(selectedSession)} className="text-xs px-3 py-1 rounded-full border border-gold text-gold">
+                      Kurs bearbeiten
+                    </button>
+                    <button onClick={() => endCourse(selectedSession.courseId, selectedSession.courseName)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">
+                      Kurs beenden
+                    </button>
+                    <button onClick={() => purgeCourse(selectedSession.courseId, selectedSession.courseName)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">
+                      Kurs löschen
                     </button>
                     <button onClick={() => setSelectedSessionId(null)} className="text-xs text-muted underline">Schließen</button>
                   </div>
@@ -1520,15 +1711,15 @@ export default function AdminPage() {
                                 <span className={`px-2 py-0.5 rounded-full border ${o.access === "allow" ? "border-gold text-gold" : "border-wine text-wine"}`}>
                                   {o.access === "allow" ? "Freigegeben" : "Gesperrt"}
                                 </span>
-                                {o.course?.name}
+                                {o.course_type?.name}
                                 <button onClick={() => removeOverride(o.id)} className="text-wine underline">entfernen</button>
                               </li>
                             ))}
                           </ul>
                         )}
                         <form onSubmit={submitOverride} className="grid sm:grid-cols-3 gap-2">
-                          <select value={overrideForm.courseId} onChange={(e) => setOverrideForm({ ...overrideForm, courseId: e.target.value })} className={inputClass}>
-                            {courses.filter((co) => co.active).map((co) => <option key={co.id} value={co.id}>{co.name}</option>)}
+                          <select value={overrideForm.courseTypeId} onChange={(e) => setOverrideForm({ ...overrideForm, courseTypeId: e.target.value })} className={inputClass}>
+                            {courseTypes.filter((t: any) => t.active).map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
                           </select>
                           <select value={overrideForm.access} onChange={(e) => setOverrideForm({ ...overrideForm, access: e.target.value })} className={inputClass}>
                             <option value="allow">Freigeben</option>
@@ -1704,6 +1895,34 @@ export default function AdminPage() {
       {tab === "meldungen" && (() => {
         const todayStr = formatDateOnly(today);
         const alerts: { severity: "rot" | "gelb"; type: string; message: string; key: string }[] = [];
+
+        // Raum-Doppelbelegung: gleicher Raum, gleicher Tag, überlappende Zeiten
+        function minutesOf(t: string) {
+          const [h, m] = (t ?? "00:00").split(":").map(Number);
+          return h * 60 + (m || 0);
+        }
+        const byRoomDay: Record<string, any[]> = {};
+        sessions.filter((s) => !s.cancelled && s.room).forEach((s) => {
+          (byRoomDay[`${s.room}|${s.date}`] ??= []).push(s);
+        });
+        Object.entries(byRoomDay).forEach(([key, list]) => {
+          const sorted = [...list].sort((a, b) => minutesOf(a.time) - minutesOf(b.time));
+          for (let i = 0; i < sorted.length; i++) {
+            for (let j = i + 1; j < sorted.length; j++) {
+              const a = sorted[i], b = sorted[j];
+              const aStart = minutesOf(a.time), aEnd = aStart + (a.durationMinutes ?? 70);
+              const bStart = minutesOf(b.time), bEnd = bStart + (b.durationMinutes ?? 70);
+              if (aStart < bEnd && bStart < aEnd) {
+                alerts.push({
+                  severity: "rot", type: "Raum doppelt belegt",
+                  message: `${a.room} am ${a.date}: "${a.courseName}" (${a.time?.slice(0, 5)}) und "${b.courseName}" (${b.time?.slice(0, 5)}) überschneiden sich`,
+                  key: `room-${key}-${a.id}-${b.id}`,
+                });
+              }
+            }
+          }
+        });
+
         sessions.forEach((s) => {
           const confirmedN = confirmedCount(s);
           if (confirmedN > s.capacity) {

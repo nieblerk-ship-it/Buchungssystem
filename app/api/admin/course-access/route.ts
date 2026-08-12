@@ -15,33 +15,35 @@ export async function GET(req: Request) {
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("customer_course_overrides")
-    .select("id, access, notes, course:courses(id, name, category)")
+    .select("id, access, notes, course_type:course_types(id, name, category)")
     .eq("customer_id", customerId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ overrides: data });
 }
 
 // POST /api/admin/course-access
-// body: { customerId, courseId, access: 'allow'|'deny', notes? }
-// Legt eine Freigabe/Sperre an oder überschreibt eine bestehende für denselben Kurs.
+// body: { customerId, courseTypeId, access: 'allow'|'deny', notes? }
+// Legt eine Freigabe/Sperre für eine Kursbezeichnung an (gilt für alle Instanzen).
 export async function POST(req: Request) {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
 
   const body = await req.json();
-  const { customerId, courseId, access, notes } = body;
-  if (!customerId || !courseId || !["allow", "deny"].includes(access)) {
-    return NextResponse.json({ error: "Schüler, Kurs und Freigabe/Sperre müssen angegeben sein." }, { status: 400 });
+  const { customerId, courseTypeId, access, notes } = body;
+  if (!customerId || !courseTypeId || !["allow", "deny"].includes(access)) {
+    return NextResponse.json({ error: "Schüler, Kursbezeichnung und Freigabe/Sperre müssen angegeben sein." }, { status: 400 });
   }
   const db = supabaseAdmin();
   const { error } = await db
     .from("customer_course_overrides")
     .upsert(
-      { customer_id: customerId, course_id: courseId, access, notes: notes?.trim() || null },
-      { onConflict: "customer_id,course_id" }
+      { customer_id: customerId, course_type_id: courseTypeId, access, notes: notes?.trim() || null },
+      { onConflict: "customer_id,course_type_id" }
     );
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  await logAction(admin, access === "allow" ? "allow" : "deny", "course_access", customerId, `Kurs ${access === "allow" ? "freigegeben" : "gesperrt"} (Kurs-ID ${courseId})`);
+
+  const { data: ct } = await db.from("course_types").select("name").eq("id", courseTypeId).maybeSingle();
+  await logAction(admin, access === "allow" ? "allow" : "deny", "course_access", customerId, `Kursbezeichnung "${ct?.name ?? courseTypeId}" ${access === "allow" ? "freigegeben" : "gesperrt"}`);
   return NextResponse.json({ ok: true });
 }
 

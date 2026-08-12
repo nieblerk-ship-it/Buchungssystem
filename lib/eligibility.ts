@@ -1,27 +1,31 @@
 import { supabaseAdmin } from "@/lib/supabase";
 
-// Regel (Phase 2): eine explizite Freigabe/Sperre pro Kurs gewinnt immer.
+// Regel (ab Phase E2): eine explizite Freigabe/Sperre pro KURSBEZEICHNUNG
+// gewinnt immer — sie gilt damit für alle Instanzen dieser Bezeichnung
+// (z.B. "Beginner 2/3" in Raum 1 und Raum 2, egal bei welcher Trainerin).
 // Ohne Override entscheidet, ob ein aktives Produkt die Kurs-Kategorie am
 // Termindatum abdeckt.
 export async function canBookCourse(
   db: ReturnType<typeof supabaseAdmin>,
   customerId: string,
-  courseId: string,
+  courseTypeId: string | null,
   courseCategory: string,
   sessionDate: string
 ): Promise<{ allowed: boolean; reason?: string }> {
-  const { data: override } = await db
-    .from("customer_course_overrides")
-    .select("access")
-    .eq("customer_id", customerId)
-    .eq("course_id", courseId)
-    .maybeSingle();
+  if (courseTypeId) {
+    const { data: override } = await db
+      .from("customer_course_overrides")
+      .select("access")
+      .eq("customer_id", customerId)
+      .eq("course_type_id", courseTypeId)
+      .maybeSingle();
 
-  if (override?.access === "deny") {
-    return { allowed: false, reason: "Für diesen Kurs bist du aktuell nicht freigegeben. Bitte im Studio nachfragen." };
-  }
-  if (override?.access === "allow") {
-    return { allowed: true };
+    if (override?.access === "deny") {
+      return { allowed: false, reason: "Für diesen Kurs bist du aktuell nicht freigegeben. Bitte im Studio nachfragen." };
+    }
+    if (override?.access === "allow") {
+      return { allowed: true };
+    }
   }
 
   const { data: products } = await db

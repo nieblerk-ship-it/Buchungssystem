@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabase";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 import { verifyTrainerSession, TRAINER_COOKIE_NAME } from "@/lib/trainerAuth";
 
 // GET /api/trainer/bookings
@@ -30,7 +33,8 @@ export async function GET() {
     )
     .in("course_id", courseIds)
     .gte("session_date", from.toISOString().slice(0, 10))
-    .order("session_date", { ascending: true });
+    .order("session_date", { ascending: true })
+    .limit(5000);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

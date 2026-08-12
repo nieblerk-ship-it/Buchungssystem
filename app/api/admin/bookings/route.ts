@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 import { requireAdmin } from "@/lib/adminAuth";
 import { logAction } from "@/lib/auditLog";
 import { promoteFromWaitlist } from "@/lib/waitlist";
@@ -23,11 +26,12 @@ export async function GET() {
     .from("course_sessions")
     .select(
       `id, session_date, cancelled, capacity_override,
-       course:courses ( name, level, category, room, start_time, capacity ),
+       course:courses ( id, name, level, category, room, start_time, duration_minutes, capacity, active, ended_on, end_date, weekday, is_single, course_type_id, trainer_id ),
        bookings ( id, status, notes, source, customer_product_id, attended, created_at, deleted_customer_name, deleted_customer_email, customer:customers ( id, name, email ) )`
     )
     .gte("session_date", from.toISOString().slice(0, 10))
-    .order("session_date", { ascending: true });
+    .order("session_date", { ascending: true })
+    .limit(5000);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -70,10 +74,23 @@ export async function GET() {
       id: s.id,
       date: s.session_date,
       cancelled: s.cancelled,
+      courseId: s.course?.id,
       courseName: s.course?.name,
+      courseActive: !s.course?.ended_on || s.session_date <= s.course.ended_on,
+      courseEndedOn: s.course?.ended_on ?? null,
+      courseEndDate: s.course?.end_date ?? null,
+      courseWeekday: s.course?.weekday ?? null,
+      courseIsSingle: s.course?.is_single ?? false,
+      courseTypeId: s.course?.course_type_id ?? null,
+      courseLevel: s.course?.level ?? null,
+      courseCategory: s.course?.category ?? null,
+      courseInstructor: s.course?.instructor ?? null,
+      courseTrainerId: s.course?.trainer_id ?? null,
+      courseDuration: s.course?.duration_minutes ?? 70,
       level: s.course?.level,
       time: s.course?.start_time,
       room: s.course?.room,
+      durationMinutes: s.course?.duration_minutes ?? 70,
       capacity: s.capacity_override ?? s.course?.capacity,
       participants: relevant.map((b: any) => ({
         bookingId: b.id,

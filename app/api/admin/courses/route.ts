@@ -127,47 +127,202 @@ export async function POST(req: Request) {
 }
 
 // PATCH /api/admin/courses
-// body: { id, ...felder, regenerate?: boolean }
+// body: { id, courseTypeId?, newTypeName?, category?, level?, instructor?, room?,
+//         trainer_id?, weekday?, start_time?, duration_minutes?, capacity?, notes?,
+//         endDate?, splitFrom? }
+//
+// Bearbeitet einen Kurs. WICHTIG: Änderungen wirken sich nur auf künftige
+// Termine aus — bereits stattgefundene Termine bleiben unverändert erhalten,
+// damit die Dokumentation stimmt.
+//
+// splitFrom (Datum): Ändert den Kurs AB DIESEM TERMIN. Die bisherige Kursreihe
+//   wird am Tag davor beendet und behält alle ihre Termine unverändert
+//   (inklusive Buchungen und Anwesenheiten). Ab dem Stichtag entsteht eine NEUE
+//   Kursreihe mit den geänderten Daten — so steht z.B. ein Beginner-Kurs von
+//   vor einem Monat weiterhin als "Beginner" im Kalender, obwohl die Gruppe
+//   inzwischen als "Intermediate" weiterläuft. Buchungen der künftigen Termine
+//   werden dabei in die neue Reihe übernommen.
+//
+// - Ändert sich Wochentag oder die Laufzeit (endDate), werden künftige Termine
+//   neu erzeugt: alle Termine nach heute werden entfernt und für den neuen
+//   Zeitraum/Wochentag neu angelegt.
+// - endDate darf nicht in der Vergangenheit liegen.
 export async function PATCH(req: Request) {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
 
   const body = await req.json();
-  const { id, regenerate, course_type, ...fields } = body;
+  const { id, courseTypeId, newTypeName, endDate, splitFrom, course_type, regenerate, ...fields } = body;
   if (!id) return NextResponse.json({ error: "Kurs-ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
-  const { error } = await db.from("courses").update(fields).eq("id", id);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data: before } = await db
+    .from("courses")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (!before) return NextResponse.json({ error: "Kurs nicht gefunden." }, { status: 404 });
+
+  // ---- Variante A: Änderung ab einem bestimmten Termin (Kurs-Split) ----
+  if (splitFrom && !before.is_single) {
+    if (splitFrom <= today) {
+      return NextResponse.json({
+        error: "Eine Änderung ab einem vergangenen oder heutigen Termin ist nicht möglich — sonst würde sich die bereits dokumentierte Vergangenheit ändern. Bitte einen künftigen Termin wählen.",
+      }, { status: 400 });
+    }
+    return await splitCourse(db, admin, id, before, splitFrom, { courseTypeId, newTypeName, endDate, ...fields });
+  }
+
+  const updates: Record<string, unknown> = { ...fields };
+
+  // Kursbezeichnung wechseln (z.B. Gruppe steigt ins nächste Level auf)
+  if (courseTypeId || newTypeName?.trim()) {
+    let typeId = courseTypeId as string | undefined;
+    let typeName = "";
+    if (typeId) {
+      const { data: ct } = await db.from("course_types").select("name, category").eq("id", typeId).maybeSingle();
+      if (!ct) return NextResponse.json({ error: "Kursbezeichnung nicht gefunden." }, { status: 404 });
+      typeName = ct.name;
+      if (!updates.category) updates.category = ct.category;
+    } else {
+      const name = newTypeName.trim();
+      const { data: existing } = await db.from("course_types").select("id, name").eq("name", name).maybeSingle();
+      if (existing) {
+        typeId = existing.id;
+        typeName = existing.name;
+      } else {
+        const { data: created, error: ctErr } = await db
+          .from("course_types")
+          .insert({ name, category: (updates.category as string) || "Pole" })
+          .select("id, name")
+          .single();
+        if (ctErr) return NextResponse.json({ error: ctErr.message }, { status: 500 });
+        typeId = created.id;
+        typeName = created.name;
+        await logAction(admin, "create", "course_type", created.id, `Kursbezeichnung "${name}" angelegt`);
+      }
+    }
+    updates.course_type_id = typeId;
+    updates.name = typeName;
+  }
+
+  // Laufzeit ändern — nie in die Vergangenheit
+  let regenerateSessions = false;
+  if (endDate !== undefined && endDate !== null && endDate !== "") {
+    if (endDate < today) {
+      return NextResponse.json({
+        error: "Das Enddatum darf nicht in der Vergangenheit liegen. Um einen Kurs jetzt zu beenden, nutze bitte \"Kurs beenden\".",
+      }, { status: 400 });
+    }
+    updates.end_date = endDate;
+    regenerateSessions = true;
+  }
+  if (fields.weekday !== undefined && fields.weekday !== before.weekday) {
+    regenerateSessions = true;
+  }
+
+  const { error } = await db.from("courses").update(updates).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  if (regenerate && fields.weekday && fields.start_date && fields.end_date) {
-    await generateSessions(db, id, {
-      isSingle: false,
-      weekday: fields.weekday,
-      startDate: fields.start_date,
-      endDate: fields.end_date,
-    });
+  let removed = 0;
+  let created = 0;
+  if (regenerateSessions && !before.is_single) {
+    const effectiveWeekday = (updates.weekday as number) ?? before.weekday;
+    const effectiveEnd = (updates.end_date as string) ?? before.end_date;
+    removed = await removeFutureSessions(db, id, today);
+    if (effectiveEnd && effectiveEnd > today) {
+      const startFrom = new Date(today);
+      startFrom.setDate(startFrom.getDate() + 1);
+      created = await generateSessions(db, id, {
+        isSingle: false,
+        weekday: effectiveWeekday,
+        startDate: startFrom.toISOString().slice(0, 10),
+        endDate: effectiveEnd,
+      });
+    }
+    await ensureEnrollmentBookings(db, id);
   }
-  await ensureEnrollmentBookings(db, id);
-  await logAction(admin, "update", "course", id, `Kurs "${fields.name ?? id}" bearbeitet`);
 
-  return NextResponse.json({ ok: true });
+  await logAction(
+    admin, "update", "course", id,
+    `Kurs "${updates.name ?? before.name}" bearbeitet` +
+    (regenerateSessions ? ` (künftige Termine neu erzeugt: ${removed} entfernt, ${created} angelegt; Vergangenheit unverändert)` : "")
+  );
+
+  return NextResponse.json({ ok: true, removedFuture: removed, createdFuture: created });
 }
 
-// DELETE /api/admin/courses?id=...
+// DELETE /api/admin/courses?id=...&mode=end|purge
+//
+// mode=end (Standard): Kurs zum heutigen Tag beenden. Vergangene und heutige
+//   Termine bleiben vollständig erhalten (Dokumentation!), alle künftigen
+//   Termine werden entfernt — inklusive ihrer Buchungen, da sie ja nicht
+//   mehr stattfinden.
+// mode=purge: Kurs vollständig löschen. Nur erlaubt, wenn es KEINE
+//   vergangenen Termine mit Buchungen gibt, damit keine dokumentierte
+//   Vergangenheit verloren geht.
 export async function DELETE(req: Request) {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Nicht eingeloggt." }, { status: 401 });
 
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
+  const mode = url.searchParams.get("mode") ?? "end";
   if (!id) return NextResponse.json({ error: "Kurs-ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
-  const { error } = await db.from("courses").update({ active: false }).eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  await logAction(admin, "deactivate", "course", id, "Kurs deaktiviert");
-  return NextResponse.json({ ok: true });
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: course } = await db.from("courses").select("name").eq("id", id).maybeSingle();
+  if (!course) return NextResponse.json({ error: "Kurs nicht gefunden." }, { status: 404 });
+
+  if (mode === "purge") {
+    const { data: pastSessions } = await db
+      .from("course_sessions")
+      .select("id")
+      .eq("course_id", id)
+      .lt("session_date", today);
+    const pastIds = (pastSessions ?? []).map((s) => s.id);
+
+    if (pastIds.length > 0) {
+      const { count } = await db
+        .from("bookings")
+        .select("id", { count: "exact", head: true })
+        .in("course_session_id", pastIds);
+      if ((count ?? 0) > 0) {
+        return NextResponse.json({
+          error: "Dieser Kurs hat bereits stattgefundene Termine mit Buchungen und kann deshalb nicht vollständig gelöscht werden. Bitte stattdessen beenden — die Vergangenheit bleibt dann als Nachweis erhalten.",
+        }, { status: 409 });
+      }
+    }
+
+    await db.from("courses").delete().eq("id", id);
+    await logAction(admin, "delete", "course", id, `Kurs "${course.name}" vollständig gelöscht (keine dokumentierte Vergangenheit vorhanden)`);
+    return NextResponse.json({ ok: true, purged: true });
+  }
+
+  const removed = await removeFutureSessions(db, id, today);
+  await db.from("courses").update({ ended_on: today, end_date: today }).eq("id", id);
+  await db.from("enrollments").update({ active: false }).eq("course_id", id).eq("active", true);
+
+  await logAction(admin, "end", "course", id, `Kurs "${course.name}" zum ${today} beendet (${removed} künftige Termine entfernt, Vergangenheit bleibt erhalten)`);
+  return NextResponse.json({ ok: true, removedFuture: removed });
+}
+
+// Entfernt alle Termine eines Kurses NACH dem Stichtag (inkl. deren Buchungen).
+// Vergangene und heutige Termine bleiben immer unangetastet.
+async function removeFutureSessions(db: ReturnType<typeof supabaseAdmin>, courseId: string, afterDate: string) {
+  const { data: futureSessions } = await db
+    .from("course_sessions")
+    .select("id")
+    .eq("course_id", courseId)
+    .gt("session_date", afterDate);
+  const futureIds = (futureSessions ?? []).map((s) => s.id);
+  if (futureIds.length === 0) return 0;
+  await db.from("bookings").delete().in("course_session_id", futureIds);
+  await db.from("course_sessions").delete().in("id", futureIds);
+  return futureIds.length;
 }
 
 function isoWeekdayOf(dateStr: string) {
@@ -205,4 +360,122 @@ async function generateSessions(
   if (rows.length === 0) return 0;
   await db.from("course_sessions").upsert(rows, { onConflict: "course_id,session_date", ignoreDuplicates: true });
   return rows.length;
+}
+
+// Beendet die bisherige Kursreihe am Tag vor `splitFrom` und legt ab diesem
+// Datum eine neue Kursreihe mit den geänderten Daten an. Künftige Termine der
+// alten Reihe werden mitsamt ihren Buchungen in die neue Reihe übernommen,
+// vergangene Termine bleiben unangetastet bei der alten Reihe.
+async function splitCourse(
+  db: ReturnType<typeof supabaseAdmin>,
+  admin: { id: string; name: string; email: string },
+  oldCourseId: string,
+  before: any,
+  splitFrom: string,
+  changes: any
+) {
+  const dayBefore = new Date(splitFrom + "T00:00:00");
+  dayBefore.setDate(dayBefore.getDate() - 1);
+  const endOfOld = dayBefore.toISOString().slice(0, 10);
+
+  // Bezeichnung der neuen Reihe ermitteln
+  let typeId: string | null = before.course_type_id ?? null;
+  let typeName: string = before.name;
+  if (changes.courseTypeId) {
+    const { data: ct } = await db.from("course_types").select("name, category").eq("id", changes.courseTypeId).maybeSingle();
+    if (!ct) return NextResponse.json({ error: "Kursbezeichnung nicht gefunden." }, { status: 404 });
+    typeId = changes.courseTypeId;
+    typeName = ct.name;
+    if (!changes.category) changes.category = ct.category;
+  } else if (changes.newTypeName?.trim()) {
+    const name = changes.newTypeName.trim();
+    const { data: existing } = await db.from("course_types").select("id, name").eq("name", name).maybeSingle();
+    if (existing) {
+      typeId = existing.id;
+      typeName = existing.name;
+    } else {
+      const { data: created, error: ctErr } = await db
+        .from("course_types")
+        .insert({ name, category: changes.category || before.category || "Pole" })
+        .select("id, name")
+        .single();
+      if (ctErr) return NextResponse.json({ error: ctErr.message }, { status: 500 });
+      typeId = created.id;
+      typeName = created.name;
+      await logAction(admin, "create", "course_type", created.id, `Kursbezeichnung "${name}" angelegt`);
+    }
+  }
+
+  const newEnd = changes.endDate || before.end_date;
+  const newWeekday = changes.weekday ?? before.weekday;
+
+  // Neue Kursreihe anlegen
+  const { data: newCourse, error: insErr } = await db
+    .from("courses")
+    .insert({
+      course_type_id: typeId,
+      name: typeName,
+      category: changes.category ?? before.category,
+      level: changes.level !== undefined ? (changes.level || null) : before.level,
+      instructor: changes.instructor !== undefined ? (changes.instructor || null) : before.instructor,
+      room: changes.room ?? before.room,
+      trainer_id: changes.trainer_id !== undefined ? (changes.trainer_id || null) : before.trainer_id,
+      weekday: newWeekday,
+      start_time: changes.start_time ?? before.start_time,
+      duration_minutes: changes.duration_minutes ?? before.duration_minutes,
+      capacity: changes.capacity ?? before.capacity,
+      notes: changes.notes !== undefined ? (changes.notes || null) : before.notes,
+      is_single: false,
+      start_date: splitFrom,
+      end_date: newEnd,
+    })
+    .select("id")
+    .single();
+  if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
+
+  // Alte Reihe am Tag davor beenden
+  await db.from("courses").update({ ended_on: endOfOld, end_date: endOfOld }).eq("id", oldCourseId);
+
+  // Künftige Termine der alten Reihe an die neue Reihe übergeben (Buchungen
+  // bleiben dadurch automatisch erhalten, da sie am Termin hängen).
+  const { data: movedSessions } = await db
+    .from("course_sessions")
+    .select("id, session_date")
+    .eq("course_id", oldCourseId)
+    .gte("session_date", splitFrom);
+  const movedIds = (movedSessions ?? []).map((s) => s.id);
+
+  let moved = 0;
+  for (const s of movedSessions ?? []) {
+    // Termine, die nicht mehr zum neuen Wochentag/Zeitraum passen, entfernen
+    const d = new Date(s.session_date + "T00:00:00");
+    const isoWeekday = ((d.getDay() + 6) % 7) + 1;
+    const outOfRange = (newEnd && s.session_date > newEnd) || isoWeekday !== newWeekday;
+    if (outOfRange) {
+      await db.from("bookings").delete().eq("course_session_id", s.id);
+      await db.from("course_sessions").delete().eq("id", s.id);
+    } else {
+      await db.from("course_sessions").update({ course_id: newCourse.id }).eq("id", s.id);
+      moved++;
+    }
+  }
+
+  // Fehlende Termine der neuen Reihe ergänzen
+  const created = await generateSessions(db, newCourse.id, {
+    isSingle: false,
+    weekday: newWeekday,
+    startDate: splitFrom,
+    endDate: newEnd,
+  });
+
+  // Feste Zuteilungen auf die neue Reihe umhängen
+  await db.from("enrollments").update({ course_id: newCourse.id }).eq("course_id", oldCourseId).eq("active", true);
+  await ensureEnrollmentBookings(db, newCourse.id);
+
+  await logAction(
+    admin, "split", "course", newCourse.id,
+    `Kurs "${before.name}" ab ${splitFrom} geändert zu "${typeName}" — bisherige Reihe endet am ${endOfOld} und bleibt unverändert dokumentiert (${moved} Termine übernommen, ${Math.max(0, created - moved)} neu angelegt)`
+  );
+
+  return NextResponse.json({ ok: true, split: true, newCourseId: newCourse.id, movedSessions: moved });
 }

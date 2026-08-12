@@ -271,6 +271,55 @@ Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_13_course_t
   braucht nur ein Datum, regelmäßiger Termin Wochentag + Start- und Enddatum.
   Die Termine werden für genau diesen Zeitraum erzeugt.
 
+## Phase E2 – Freigaben pro Bezeichnung, Raumkollision, Kurs deaktivieren (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_14_overrides_by_type.sql`
+(hängt bestehende Freigaben automatisch auf die jeweilige Kursbezeichnung um)
+
+- **Freigaben/Sperren gelten jetzt pro Kursbezeichnung.** Gibst du "Beginner 2/3"
+  für eine Person frei, gilt das für alle Instanzen dieser Bezeichnung — egal in
+  welchem Raum, zu welcher Zeit oder bei welcher Trainerin. Im Reiter
+  Schüler:innen → "Freigaben" wählst du entsprechend die Bezeichnung statt eines
+  einzelnen Kurses.
+- **Raum-Doppelbelegung** wird erkannt: liegen zwei nicht abgesagte Kurse im
+  selben Raum am selben Tag mit sich überschneidenden Zeiten (Startzeit + Dauer),
+  erscheint im Reiter **Meldungen** eine rote Meldung "Raum doppelt belegt".
+- **"Ganzen Kurs deaktivieren"** im Termin-Detailbereich — ersetzt die Funktion
+  aus dem entfallenen Reiter "Kurse verwalten". Der Kurs verschwindet damit von
+  der Buchungsseite, bestehende Termine und Buchungen bleiben erhalten. Für
+  einzelne Ausfälle weiterhin "Termin absagen" nutzen.
+
+## Kurse beenden, bearbeiten, löschen (Nachbesserung zu E2)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_15_course_end_and_delete.sql`
+
+**Wichtige Korrektur:** "Kurs deaktivieren" ist komplett entfallen — es hat
+rückwirkend auch bereits stattgefundene Termine unsichtbar gemacht, was für die
+Dokumentation schlecht war. Stattdessen gibt es drei klar getrennte Aktionen im
+Termin-Detailbereich:
+
+- **Kurs bearbeiten**: Bezeichnung (z.B. Level-Aufstieg), Kategorie, Level, Raum,
+  Trainer:in, Zeit, Dauer, Kapazität, Wochentag und **Laufzeit** ändern.
+  Änderungen wirken sich ausschließlich auf künftige Termine aus; vergangene
+  Termine bleiben unverändert dokumentiert. Das Enddatum lässt sich nur in der
+  Zukunft setzen (zum sofortigen Beenden gibt es "Kurs beenden").
+  Damit kannst du eine Kursreihe kürzen oder eine Gruppe ins nächste Level
+  heben, ohne alles neu anzulegen.
+- **Änderung ab einem bestimmten Termin (Level-Aufstieg)**: Im Bearbeiten-Panel
+  wählst du, ob die Änderung für *alle künftigen Termine* gilt oder erst *ab dem
+  Termin, den du angeklickt hast*. Bei der zweiten Variante wird die Kursreihe
+  gesplittet: die bisherige Reihe endet am Tag davor und bleibt mit ihrem alten
+  Namen und Level vollständig im Kalender stehen, ab dem Stichtag läuft eine neue
+  Reihe mit den geänderten Daten. So steht ein Beginner-Kurs von vor einem Monat
+  weiterhin als "Beginner" im Kalender, auch wenn die Gruppe inzwischen als
+  "Intermediate" weiterläuft. Buchungen der künftigen Termine werden übernommen.
+- **Kurs beenden**: beendet die Reihe ab heute. Künftige Termine werden samt
+  Buchungen entfernt, Vergangenes bleibt vollständig erhalten.
+- **Kurs löschen**: entfernt den Kurs komplett. Nur möglich, wenn es keine
+  bereits stattgefundenen Termine mit Buchungen gibt — sonst kommt ein Hinweis,
+  damit keine dokumentierte Vergangenheit verloren geht. Gedacht für versehentlich
+  angelegte Kurse.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 

@@ -18,7 +18,7 @@ export async function POST(req: Request) {
 
   const { data: session, error: sessionErr } = await db
     .from("course_sessions")
-    .select("id, session_date, cancelled, capacity_override, course:courses(id, name, category, capacity)")
+    .select("id, session_date, cancelled, capacity_override, course:courses(id, name, category, capacity, course_type_id)")
     .eq("id", courseSessionId)
     .single();
 
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
   const eligibility = await canBookCourse(
     db,
     customerId,
-    (session.course as any)?.id,
+    (session.course as any)?.course_type_id ?? null,
     (session.course as any)?.category,
     session.session_date
   );
