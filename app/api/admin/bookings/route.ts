@@ -6,6 +6,7 @@ export const revalidate = 0;
 import { requireAdmin } from "@/lib/adminAuth";
 import { logAction } from "@/lib/auditLog";
 import { promoteFromWaitlist } from "@/lib/waitlist";
+import { isBookingLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 // GET /api/admin/bookings
 // Liefert Termine der letzten 60 Tage bis unbegrenzt in die Zukunft (damit
@@ -25,7 +26,7 @@ export async function GET() {
   const { data: sessions, error } = await db
     .from("course_sessions")
     .select(
-      `id, session_date, cancelled, capacity_override,
+      `id, session_date, cancelled, capacity_override, trainer_id, instructor,
        course:courses ( id, name, level, category, room, start_time, duration_minutes, capacity, active, ended_on, end_date, weekday, is_single, course_type_id, trainer_id ),
        bookings ( id, status, notes, source, customer_product_id, attended, created_at, deleted_customer_name, deleted_customer_email, customer:customers ( id, name, email ) )`
     )
@@ -85,6 +86,10 @@ export async function GET() {
       courseLevel: s.course?.level ?? null,
       courseCategory: s.course?.category ?? null,
       courseInstructor: s.course?.instructor ?? null,
+      substituteTrainerId: s.trainer_id ?? null,
+      substituteInstructor: s.instructor ?? null,
+      effectiveTrainerName: s.instructor ?? s.course?.instructor ?? null,
+      hasSubstitute: !!(s.trainer_id || s.instructor),
       courseTrainerId: s.course?.trainer_id ?? null,
       courseDuration: s.course?.duration_minutes ?? 70,
       level: s.course?.level,
@@ -127,6 +132,10 @@ export async function PATCH(req: Request) {
   if (!bookingId) return NextResponse.json({ error: "Buchungs-ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
+
+  if (await isBookingLocked(db, bookingId)) {
+    return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
+  }
 
   const { data: before } = await db.from("bookings").select("status, course_session_id").eq("id", bookingId).maybeSingle();
 

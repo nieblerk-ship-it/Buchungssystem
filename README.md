@@ -320,6 +320,47 @@ Termin-Detailbereich:
   damit keine dokumentierte Vergangenheit verloren geht. Gedacht für versehentlich
   angelegte Kurse.
 
+## Phase F – Kalender sperren (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_16_calendar_locks.sql`
+
+Neuer Reiter **"Kalender-Sperren"** im Admin-Bereich. Dort sperrst du einen
+Zeitraum (von/bis, optional mit Grund) — typischerweise eine abgeschlossene
+Woche oder einen abgerechneten Monat.
+
+In einem gesperrten Zeitraum ist nichts mehr änderbar:
+
+- keine Anwesenheitserfassung (Admin **und** Trainer:innen)
+- keine Buchungsänderungen, Stornierungen oder Teilnehmerlisten-Änderungen
+- keine Terminabsagen oder Reaktivierungen
+- keine Kursänderungen ab einem Datum im gesperrten Bereich
+- keine neuen Anmeldungen über die öffentliche Buchungsseite
+
+Der Versuch wird serverseitig abgelehnt (nicht nur in der Oberfläche versteckt),
+mit einem klaren Hinweis, dass die Sperre zuerst aufgehoben werden muss.
+Gesperrte Tage sind im Kalender mit "gesperrt" gekennzeichnet. Sperren anlegen
+und aufheben wird im Änderungslog protokolliert.
+
+## Kursänderungen immer mit Stichtag + Trainer-Vertretung (Update)
+
+Zusätzlich in Supabase ausführen: `supabase/migration_17_session_trainer.sql`
+
+- **Jede inhaltliche Kursänderung ist jetzt ein Split.** Die Option "Für alle
+  künftigen Termine" ist entfallen; stattdessen wählst du **"Ab dem [Termin]"**
+  (dem angeklickten) oder **"Ab heute"** — letzteres schließt den heutigen Tag
+  mit ein. Die bisherige Reihe endet am Tag davor und bleibt mit altem Namen,
+  Level und Trainer:in dokumentiert. Rückwirkend ändert sich dadurch nie etwas.
+- **Kalender-Sperren gelten nur noch für die Vergangenheit**: das Enddatum muss
+  vor dem heutigen Tag liegen. Dadurch blockieren Sperren keine Kursänderungen,
+  kein Beenden, Löschen oder Anlegen mehr — die betreffen ausschließlich die
+  Zukunft.
+- **Trainer:in ändern** (neuer Button im Termin-Detailbereich) mit drei
+  Reichweiten: **nur dieser Termin** (Vertretung), **Zeitraum** (z.B. Urlaub)
+  oder **dauerhaft übernehmen** (führt zur Kursbearbeitung mit Stichtag).
+  Vertretungen erscheinen im Kalender als "Vertretung: …"; die vertretende
+  Trainerin sieht den Termin in ihrem eigenen Bereich und kann dort die
+  Anwesenheit erfassen.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 

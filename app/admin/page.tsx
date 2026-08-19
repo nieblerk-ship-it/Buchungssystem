@@ -90,7 +90,7 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log" | "sperren">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [trainers, setTrainers] = useState<any[]>([]);
   const [newTrainer, setNewTrainer] = useState({ name: "", email: "", newPassword: "" });
@@ -116,6 +116,8 @@ export default function AdminPage() {
   const [newCourse, setNewCourse] = useState<any>(EMPTY_COURSE);
   const [showCourseForm, setShowCourseForm] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  const [locks, setLocks] = useState<any[]>([]);
+  const [lockForm, setLockForm] = useState({ startDate: "", endDate: "", reason: "" });
   const [courseTypes, setCourseTypes] = useState<any[]>([]);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [editCourse, setEditCourse] = useState<any>(null);
@@ -175,7 +177,7 @@ export default function AdminPage() {
   const [logLoading, setLogLoading] = useState(false);
 
   async function loadAll() {
-    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes()]);
+    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes(), loadLocks()]);
   }
 
   useEffect(() => {
@@ -254,6 +256,42 @@ export default function AdminPage() {
     const data = await res.json();
     if (res.ok) setTrainers(data.trainers);
   }
+  async function loadLocks() {
+    const res = await fetch(`/api/admin/calendar-locks`);
+    const data = await res.json();
+    if (res.ok) setLocks(data.locks);
+  }
+  async function createLock(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/calendar-locks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(lockForm),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setLockForm({ startDate: "", endDate: "", reason: "" });
+    await loadLocks();
+  }
+  function removeLock(id: string, from: string, to: string) {
+    askConfirm(
+      "Sperre aufheben",
+      `Die Sperre für ${from} bis ${to} aufheben? Danach sind in diesem Zeitraum wieder Änderungen an Buchungen, Anwesenheiten und Terminen möglich.`,
+      "Sperre aufheben",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/calendar-locks?id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await loadLocks();
+      },
+      true
+    );
+  }
+  function isLocked(dateStr: string) {
+    return locks.some((l: any) => dateStr >= l.start_date && dateStr <= l.end_date);
+  }
+
   async function loadCourseTypes() {
     const res = await fetch(`/api/admin/course-types`);
     const data = await res.json();
@@ -448,6 +486,38 @@ export default function AdminPage() {
     await loadCourses(); await loadSessions();
   }
   const [editCoursePanel, setEditCoursePanel] = useState<any>(null);
+  const [subPanel, setSubPanel] = useState<any>(null);
+
+  function openSubPanel(s: any) {
+    setSubPanel({
+      sessionId: s.id,
+      sessionDate: s.date,
+      mode: "single",
+      trainerId: s.substituteTrainerId ?? "",
+      instructor: s.substituteInstructor ?? "",
+      rangeEnd: s.date,
+    });
+  }
+  async function submitSub() {
+    if (!subPanel) return;
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/sessions/trainer", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(subPanel),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setSubPanel(null);
+    await loadSessions();
+  }
+  async function removeSub(sessionId: string) {
+    setActionError(null);
+    const res = await fetch(`/api/admin/sessions/trainer?sessionId=${sessionId}`, { method: "DELETE" });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    setSubPanel(null);
+    await loadSessions();
+  }
 
   function openEditCourse(s: any) {
     setEditCoursePanel({
@@ -466,7 +536,7 @@ export default function AdminPage() {
       endDate: s.courseEndDate ?? "",
       isSingle: s.courseIsSingle ?? false,
       sessionDate: s.date,
-      applyMode: "all",
+      applyMode: "session",
     });
   }
 
@@ -476,7 +546,10 @@ export default function AdminPage() {
     const { id, isSingle, sessionDate, applyMode, ...rest } = editCoursePanel;
     const res = await fetch("/api/admin/courses", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, ...rest, splitFrom: applyMode === "from" ? sessionDate : undefined }),
+      body: JSON.stringify({
+        id, ...rest,
+        splitFrom: isSingle ? undefined : (applyMode === "today" ? formatDateOnly(today) : sessionDate),
+      }),
     });
     const data = await res.json();
     setSaving(false);
@@ -914,6 +987,7 @@ export default function AdminPage() {
           { id: "produkte", label: "Produkte" },
           { id: "trainer", label: "Trainer:innen" },
           { id: "meldungen", label: "Meldungen" },
+          { id: "sperren", label: "Kalender-Sperren" },
           { id: "log", label: "Änderungslog" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
@@ -1029,6 +1103,7 @@ export default function AdminPage() {
                       <div className={`text-center mb-3 pb-2 border-b ${isToday ? "border-gold" : "border-border"}`}>
                         <div className={`font-display italic text-lg ${isToday ? "text-gold" : "text-ivory"}`}>{WEEKDAY_SHORT[day.getDay() === 0 ? 6 : day.getDay() - 1]}</div>
                         <div className="text-xs text-muted">{String(day.getDate()).padStart(2, "0")}.{String(day.getMonth() + 1).padStart(2, "0")}.</div>
+                        {isLocked(dateStr) && <div className="text-[10px] text-gold mt-0.5">gesperrt</div>}
                       </div>
                       <div className="space-y-2">
                         {list.length === 0 && <p className="text-xs text-muted text-center">–</p>}
@@ -1051,6 +1126,7 @@ export default function AdminPage() {
                               </div>
                               {s.cancelled && <div className="text-wine mt-0.5">abgesagt</div>}
                               {!s.courseActive && <div className="text-wine mt-0.5">Kurs beendet</div>}
+                              {s.hasSubstitute && <div className="text-gold mt-0.5">Vertretung: {s.effectiveTrainerName ?? "andere Trainer:in"}</div>}
                             </button>
                           );
                         })}
@@ -1183,6 +1259,66 @@ export default function AdminPage() {
               </form>
             )}
 
+            {subPanel && (
+              <div className="mt-8 rounded-2xl p-5 border border-gold bg-surface space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display text-lg text-ivory">Trainer:in ändern</h3>
+                  <button onClick={() => setSubPanel(null)} className="text-xs text-muted underline">Schließen</button>
+                </div>
+
+                <div className="flex gap-2 flex-wrap">
+                  <button type="button" onClick={() => setSubPanel({ ...subPanel, mode: "single" })}
+                    className={`px-4 py-2 text-sm rounded-full ${subPanel.mode === "single" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+                    Nur dieser Termin
+                  </button>
+                  <button type="button" onClick={() => setSubPanel({ ...subPanel, mode: "range" })}
+                    className={`px-4 py-2 text-sm rounded-full ${subPanel.mode === "range" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+                    Zeitraum
+                  </button>
+                  <button type="button" onClick={() => { setSubPanel(null); openEditCourse(selectedSession); }}
+                    className="px-4 py-2 text-sm rounded-full border border-border text-muted">
+                    Dauerhaft übernehmen
+                  </button>
+                </div>
+
+                <p className="text-xs text-muted">
+                  {subPanel.mode === "single"
+                    ? `Vertretung nur am ${subPanel.sessionDate}. Der Kurs behält seine Trainer:in, für diesen einen Termin gilt die hier gewählte Person.`
+                    : `Vertretung ab dem ${subPanel.sessionDate} bis zum gewählten Enddatum. Danach gilt wieder die Trainer:in des Kurses.`}
+                  {" "}Für eine dauerhafte Übernahme wird stattdessen die Kursbearbeitung mit Stichtag verwendet — so bleibt dokumentiert, ab wann der Kurs offiziell übergeben wurde.
+                </p>
+
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <Field label="Trainer-Konto">
+                    <select value={subPanel.trainerId} onChange={(e) => setSubPanel({ ...subPanel, trainerId: e.target.value })} className={`w-full ${inputClass}`}>
+                      <option value="">— keins (nur Anzeigename) —</option>
+                      {trainers.filter((t) => t.active).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Anzeigename (optional, Freitext)">
+                    <input placeholder="z.B. Nina (Vertretung)" value={subPanel.instructor} onChange={(e) => setSubPanel({ ...subPanel, instructor: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  {subPanel.mode === "range" && (
+                    <Field label="Vertretung bis (einschließlich)">
+                      <input type="date" min={subPanel.sessionDate} value={subPanel.rangeEnd} onChange={(e) => setSubPanel({ ...subPanel, rangeEnd: e.target.value })} className={`w-full ${inputClass}`} />
+                    </Field>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button onClick={submitSub} disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                    {saving ? "Speichere…" : "Vertretung speichern"}
+                  </button>
+                  {selectedSession?.hasSubstitute && (
+                    <button onClick={() => removeSub(subPanel.sessionId)} className="px-5 py-2.5 rounded-full text-sm border border-border text-wine">
+                      Vertretung aufheben
+                    </button>
+                  )}
+                  <button onClick={() => setSubPanel(null)} className="px-5 py-2.5 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                </div>
+              </div>
+            )}
+
             {editCoursePanel && (
               <div className="mt-8 rounded-2xl p-5 border border-gold bg-surface space-y-4">
                 <div className="flex items-center justify-between">
@@ -1195,23 +1331,27 @@ export default function AdminPage() {
                     <div className="flex gap-2 flex-wrap">
                       <button
                         type="button"
-                        onClick={() => setEditCoursePanel({ ...editCoursePanel, applyMode: "all" })}
-                        className={`px-4 py-2 text-sm rounded-full ${editCoursePanel.applyMode === "all" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}
+                        onClick={() => setEditCoursePanel({ ...editCoursePanel, applyMode: "session" })}
+                        className={`px-4 py-2 text-sm rounded-full ${editCoursePanel.applyMode === "session" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}
                       >
-                        Für alle künftigen Termine
+                        Ab dem {editCoursePanel.sessionDate}
                       </button>
                       <button
                         type="button"
-                        onClick={() => setEditCoursePanel({ ...editCoursePanel, applyMode: "from" })}
-                        className={`px-4 py-2 text-sm rounded-full ${editCoursePanel.applyMode === "from" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}
+                        onClick={() => setEditCoursePanel({ ...editCoursePanel, applyMode: "today" })}
+                        className={`px-4 py-2 text-sm rounded-full ${editCoursePanel.applyMode === "today" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}
                       >
-                        Erst ab dem {editCoursePanel.sessionDate}
+                        Ab heute
                       </button>
                     </div>
                     <p className="text-xs text-muted">
-                      {editCoursePanel.applyMode === "from"
-                        ? `Die bisherige Kursreihe endet am Tag vor dem ${editCoursePanel.sessionDate} und bleibt mit ihrem alten Namen und Level vollständig im Kalender stehen. Ab dem ${editCoursePanel.sessionDate} läuft der Kurs mit den neuen Daten weiter — ideal für einen Level-Aufstieg. Buchungen der künftigen Termine werden übernommen.`
-                        : "Alle künftigen Termine dieser Kursreihe werden angepasst. Bereits stattgefundene Termine bleiben unverändert dokumentiert."}
+                      Die bisherige Kursreihe endet am Tag davor und bleibt mit ihrem alten Namen, Level und
+                      Trainer:in vollständig im Kalender stehen. Ab dem Stichtag läuft der Kurs mit den neuen
+                      Daten weiter — Buchungen der künftigen Termine werden übernommen. Rückwirkend ändert
+                      sich dadurch nie etwas.
+                      {editCoursePanel.applyMode === "session" && editCoursePanel.sessionDate < formatDateOnly(today) && (
+                        <span className="text-wine"> Achtung: Der gewählte Termin liegt in der Vergangenheit — bitte &quot;Ab heute&quot; nutzen.</span>
+                      )}
                     </p>
                   </div>
                 )}
@@ -1326,6 +1466,9 @@ export default function AdminPage() {
                     </button>
                     <button onClick={() => openEditCourse(selectedSession)} className="text-xs px-3 py-1 rounded-full border border-gold text-gold">
                       Kurs bearbeiten
+                    </button>
+                    <button onClick={() => openSubPanel(selectedSession)} className="text-xs px-3 py-1 rounded-full border border-gold text-gold">
+                      Trainer:in ändern
                     </button>
                     <button onClick={() => endCourse(selectedSession.courseId, selectedSession.courseName)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">
                       Kurs beenden
@@ -1975,6 +2118,55 @@ export default function AdminPage() {
           </div>
         );
       })()}
+
+      {tab === "sperren" && (
+        <div className="space-y-6">
+          <form onSubmit={createLock} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
+            <h3 className="font-display text-lg text-ivory mb-1">Zeitraum sperren</h3>
+            <p className="text-xs text-muted mb-2">
+              In einem gesperrten Zeitraum sind keine Änderungen mehr möglich: keine Anwesenheitserfassung,
+              keine Buchungsänderungen, keine Terminabsagen und keine Kursänderungen ab diesem Datum.
+              Gedacht für abgeschlossene Wochen oder Monate, damit rückwirkend nichts mehr verändert wird.
+            </p>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <Field label="Von (Datum)">
+                <input required type="date" value={lockForm.startDate} onChange={(e) => setLockForm({ ...lockForm, startDate: e.target.value })} className={`w-full ${inputClass}`} />
+              </Field>
+              <Field label="Bis (Datum, einschließlich)">
+                <input required type="date" value={lockForm.endDate} onChange={(e) => setLockForm({ ...lockForm, endDate: e.target.value })} className={`w-full ${inputClass}`} />
+              </Field>
+              <Field label="Grund (optional)">
+                <input placeholder="z.B. Monatsabschluss Juli" value={lockForm.reason} onChange={(e) => setLockForm({ ...lockForm, reason: e.target.value })} className={`w-full ${inputClass}`} />
+              </Field>
+            </div>
+            <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+              {saving ? "Speichere…" : "Zeitraum sperren"}
+            </button>
+          </form>
+
+          <div className="space-y-3">
+            <h3 className="font-display text-lg text-ivory">Aktive Sperren</h3>
+            {locks.length === 0 ? (
+              <p className="text-sm text-muted">Aktuell ist kein Zeitraum gesperrt.</p>
+            ) : (
+              locks.map((l: any) => (
+                <div key={l.id} className="rounded-2xl p-4 border border-border bg-surface flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <p className="text-sm text-ivory">{l.start_date} – {l.end_date}</p>
+                    <p className="text-xs text-muted mt-0.5">
+                      gesperrt von {l.locked_by_name} am {new Date(l.created_at).toLocaleDateString("de-DE")}
+                      {l.reason ? ` · ${l.reason}` : ""}
+                    </p>
+                  </div>
+                  <button onClick={() => removeLock(l.id, l.start_date, l.end_date)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">
+                    Sperre aufheben
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {tab === "log" && (
         <div className="space-y-4">

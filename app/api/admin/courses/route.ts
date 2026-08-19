@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { requireAdmin } from "@/lib/adminAuth";
 import { logAction } from "@/lib/auditLog";
 import { ensureEnrollmentBookings } from "@/lib/enrollments";
+import { isDateLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 // GET /api/admin/courses
 // Liefert ALLE Kurse (auch inaktive) inkl. ihrer Bezeichnung.
@@ -165,14 +166,27 @@ export async function PATCH(req: Request) {
     .maybeSingle();
   if (!before) return NextResponse.json({ error: "Kurs nicht gefunden." }, { status: 404 });
 
+
   // ---- Variante A: Änderung ab einem bestimmten Termin (Kurs-Split) ----
   if (splitFrom && !before.is_single) {
-    if (splitFrom <= today) {
+    if (splitFrom < today) {
       return NextResponse.json({
-        error: "Eine Änderung ab einem vergangenen oder heutigen Termin ist nicht möglich — sonst würde sich die bereits dokumentierte Vergangenheit ändern. Bitte einen künftigen Termin wählen.",
+        error: "Eine Änderung ab einem vergangenen Termin ist nicht möglich — sonst würde sich die bereits dokumentierte Vergangenheit ändern. Nutze \"Ab heute\" oder wähle einen künftigen Termin.",
       }, { status: 400 });
     }
+    if (await isDateLocked(db, splitFrom)) {
+      return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
+    }
     return await splitCourse(db, admin, id, before, splitFrom, { courseTypeId, newTypeName, endDate, ...fields });
+  }
+
+  // ---- Variante B: nur noch für Einzeltermine ----
+  // Bei regelmäßigen Kursen wird jede inhaltliche Änderung als Split ab einem
+  // Stichtag abgebildet (Variante A), damit sich rückwirkend nie etwas ändert.
+  if (!before.is_single && (courseTypeId || newTypeName?.trim() || fields.level !== undefined || fields.category !== undefined || fields.instructor !== undefined || fields.trainer_id !== undefined || fields.room !== undefined || fields.start_time !== undefined || fields.weekday !== undefined)) {
+    return NextResponse.json({
+      error: "Inhaltliche Änderungen an einer Kursreihe brauchen einen Stichtag, damit sich rückwirkend nichts ändert. Bitte im Bearbeiten-Panel \"Ab heute\" oder \"Erst ab dem <Termin>\" wählen.",
+    }, { status: 400 });
   }
 
   const updates: Record<string, unknown> = { ...fields };

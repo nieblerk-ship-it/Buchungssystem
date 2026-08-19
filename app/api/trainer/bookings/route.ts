@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 import { verifyTrainerSession, TRAINER_COOKIE_NAME } from "@/lib/trainerAuth";
+import { isBookingLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 // GET /api/trainer/bookings
 // Liefert Termine der letzten 60 Tage bis unbegrenzt in die Zukunft, aber NUR
@@ -19,7 +20,15 @@ export async function GET() {
 
   const { data: myCourses } = await db.from("courses").select("id").eq("trainer_id", trainerId);
   const courseIds = (myCourses ?? []).map((c) => c.id);
-  if (courseIds.length === 0) return NextResponse.json({ sessions: [] });
+
+  // Termine, bei denen diese Trainerin als Vertretung eingetragen ist
+  const { data: subSessions } = await db
+    .from("course_sessions")
+    .select("id")
+    .eq("trainer_id", trainerId);
+  const subIds = (subSessions ?? []).map((s) => s.id);
+
+  if (courseIds.length === 0 && subIds.length === 0) return NextResponse.json({ sessions: [] });
 
   const from = new Date();
   from.setDate(from.getDate() - 60);
@@ -27,11 +36,14 @@ export async function GET() {
   const { data: sessions, error } = await db
     .from("course_sessions")
     .select(
-      `id, session_date, cancelled, capacity_override,
+      `id, session_date, cancelled, capacity_override, trainer_id, instructor,
        course:courses ( id, name, level, category, room, start_time, capacity ),
        bookings ( id, status, notes, source, attended, deleted_customer_name, deleted_customer_email, customer:customers ( name, email ) )`
     )
-    .in("course_id", courseIds)
+    .or([
+      courseIds.length ? `course_id.in.(${courseIds.join(",")})` : null,
+      subIds.length ? `id.in.(${subIds.join(",")})` : null,
+    ].filter(Boolean).join(","))
     .gte("session_date", from.toISOString().slice(0, 10))
     .order("session_date", { ascending: true })
     .limit(5000);
@@ -45,6 +57,7 @@ export async function GET() {
     courseName: s.course?.name,
     level: s.course?.level,
     room: s.course?.room,
+    isSubstitute: s.trainer_id === trainerId && !!s.trainer_id,
     time: s.course?.start_time,
     capacity: s.capacity_override ?? s.course?.capacity,
     participants: (s.bookings ?? [])
@@ -68,16 +81,24 @@ export async function PATCH(req: Request) {
 
   const db = supabaseAdmin();
 
+  if (await isBookingLocked(db, bookingId)) {
+    return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
+  }
+
   // Sicherstellen, dass die Buchung wirklich zu einem eigenen Kurs gehört,
   // bevor etwas verändert wird.
   const { data: booking } = await db
     .from("bookings")
-    .select("id, status, course_session:course_sessions(course:courses(trainer_id))")
+    .select("id, status, course_session:course_sessions(trainer_id, course:courses(trainer_id))")
     .eq("id", bookingId)
     .maybeSingle();
 
-  const ownerTrainerId = (booking?.course_session as any)?.course?.trainer_id;
-  if (!booking || ownerTrainerId !== trainerId) {
+  const cs = booking?.course_session as any;
+  const ownerTrainerId = cs?.course?.trainer_id;
+  const substituteId = cs?.trainer_id;
+  // Zugriff hat die Kurs-Trainerin ODER die für diesen Termin eingetragene Vertretung
+  const allowed = substituteId ? substituteId === trainerId : ownerTrainerId === trainerId;
+  if (!booking || !allowed) {
     return NextResponse.json({ error: "Diese Buchung gehört nicht zu einem deiner Kurse." }, { status: 403 });
   }
   if (booking.status !== "confirmed") {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { requireAdmin } from "@/lib/adminAuth";
 import { logAction } from "@/lib/auditLog";
+import { isSessionLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 // PATCH /api/admin/sessions
 // body: { sessionId, cancelled?, capacity_override? }
@@ -18,6 +19,11 @@ export async function PATCH(req: Request) {
   if (capacity_override !== undefined) fields.capacity_override = capacity_override;
 
   const db = supabaseAdmin();
+
+  if (await isSessionLocked(db, sessionId)) {
+    return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
+  }
+
   const { error } = await db.from("course_sessions").update(fields).eq("id", sessionId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (typeof cancelled === "boolean") {
