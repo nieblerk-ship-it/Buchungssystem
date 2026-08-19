@@ -134,6 +134,10 @@ export default function AdminPage() {
 
   const [historyForCustomerId, setHistoryForCustomerId] = useState<string | null>(null);
   const [historyBookings, setHistoryBookings] = useState<any[]>([]);
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [docForm, setDocForm] = useState<any>({ title: "", docType: "Ermäßigungsnachweis", validFrom: "", validUntil: "", notes: "" });
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [docUploading, setDocUploading] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [retentionDays, setRetentionDays] = useState(90);
   const [archiveDialog, setArchiveDialog] = useState<{ id: string; name: string } | null>(null);
@@ -679,12 +683,69 @@ export default function AdminPage() {
     setAssigningFor(null);
     await loadCustomers();
   }
+  async function loadDocuments(customerId: string) {
+    const res = await fetch(`/api/admin/documents?customerId=${customerId}`);
+    const data = await res.json();
+    if (res.ok) setDocuments(data.documents);
+  }
+  async function uploadDocument(customerId: string, e: React.FormEvent) {
+    e.preventDefault();
+    if (!docFile) { setActionError("Bitte eine Datei auswählen."); return; }
+    setDocUploading(true); setActionError(null);
+    const fd = new FormData();
+    fd.append("file", docFile);
+    fd.append("customerId", customerId);
+    fd.append("title", docForm.title);
+    fd.append("docType", docForm.docType);
+    fd.append("validFrom", docForm.validFrom);
+    fd.append("validUntil", docForm.validUntil);
+    fd.append("notes", docForm.notes);
+    const res = await fetch("/api/admin/documents", { method: "POST", body: fd });
+    const data = await res.json();
+    setDocUploading(false);
+    if (!res.ok) { setActionError(data.error ?? "Upload fehlgeschlagen."); return; }
+    setDocForm({ title: "", docType: "Ermäßigungsnachweis", validFrom: "", validUntil: "", notes: "" });
+    setDocFile(null);
+    await loadDocuments(customerId);
+  }
+  async function openDocument(id: string) {
+    setActionError(null);
+    const res = await fetch(`/api/admin/documents/link?id=${id}`);
+    const data = await res.json();
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    window.open(data.url, "_blank");
+  }
+  function deleteDocument(id: string, title: string, customerId: string) {
+    askConfirm(
+      "Dokument löschen",
+      `Das Dokument "${title}" unwiderruflich löschen? Die Datei wird dabei endgültig entfernt.`,
+      "Löschen",
+      async () => {
+        setActionError(null);
+        const res = await fetch(`/api/admin/documents?id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await loadDocuments(customerId);
+      },
+      true
+    );
+  }
+  async function updateDocumentValidity(id: string, validUntil: string, customerId: string) {
+    setActionError(null);
+    const res = await fetch("/api/admin/documents", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, validUntil }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadDocuments(customerId);
+  }
+
   async function loadHistory(customerId: string) {
     const res = await fetch(`/api/admin/customer-history?customerId=${customerId}`);
     const data = await res.json();
     if (res.ok) {
       setHistoryBookings(data.bookings);
       setHistoryForCustomerId(customerId);
+      await loadDocuments(customerId);
     }
   }
   function toggleDetails(customerId: string) {
@@ -1768,6 +1829,71 @@ export default function AdminPage() {
 
                     {historyForCustomerId === c.id && (
                       <div className="mt-4 p-4 rounded-xl bg-bg border border-border space-y-4">
+                        <div>
+                          <h5 className="text-sm text-ivory font-medium mb-2">Dokumente &amp; Nachweise</h5>
+                          {documents.length === 0 ? (
+                            <p className="text-xs text-muted mb-3">Noch keine Dokumente hinterlegt.</p>
+                          ) : (
+                            <ul className="space-y-2 mb-3">
+                              {documents.map((d: any) => {
+                                const expired = d.valid_until && d.valid_until < formatDateOnly(today);
+                                return (
+                                  <li key={d.id} className="text-xs flex items-center gap-2 flex-wrap">
+                                    <span className={`px-2 py-0.5 rounded-full border ${expired ? "border-wine text-wine" : "border-border text-ivory"}`}>
+                                      {d.title}
+                                    </span>
+                                    <span className="text-muted">
+                                      {d.doc_type ? `${d.doc_type} · ` : ""}
+                                      {d.valid_until ? `gültig bis ${d.valid_until}` : "unbegrenzt gültig"}
+                                      {expired ? " · ABGELAUFEN" : ""}
+                                    </span>
+                                    <button onClick={() => openDocument(d.id)} className="text-gold underline">öffnen</button>
+                                    <label className="flex items-center gap-1 text-muted">
+                                      neu bis:
+                                      <input
+                                        type="date"
+                                        defaultValue={d.valid_until ?? ""}
+                                        onChange={(e) => updateDocumentValidity(d.id, e.target.value, c.id)}
+                                        className="px-2 py-1 rounded-lg bg-surface border border-border text-ivory"
+                                      />
+                                    </label>
+                                    <button onClick={() => deleteDocument(d.id, d.title, c.id)} className="text-wine underline">löschen</button>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
+
+                          <form onSubmit={(e) => uploadDocument(c.id, e)} className="p-3 rounded-xl bg-surface border border-border space-y-2">
+                            <p className="text-xs text-muted">Neues Dokument hochladen (PDF oder Bild, max. 10 MB)</p>
+                            <div className="grid sm:grid-cols-2 gap-2">
+                              <Field label="Titel">
+                                <input required placeholder="z.B. Studierendenausweis WS 25/26" value={docForm.title} onChange={(e) => setDocForm({ ...docForm, title: e.target.value })} className={`w-full ${inputClass}`} />
+                              </Field>
+                              <Field label="Art des Dokuments">
+                                <select value={docForm.docType} onChange={(e) => setDocForm({ ...docForm, docType: e.target.value })} className={`w-full ${inputClass}`}>
+                                  <option>Ermäßigungsnachweis</option>
+                                  <option>Einverständniserklärung</option>
+                                  <option>Gesundheitsnachweis</option>
+                                  <option>Sonstiges</option>
+                                </select>
+                              </Field>
+                              <Field label="Gültig ab (optional)">
+                                <input type="date" value={docForm.validFrom} onChange={(e) => setDocForm({ ...docForm, validFrom: e.target.value })} className={`w-full ${inputClass}`} />
+                              </Field>
+                              <Field label="Gültig bis (leer = unbegrenzt)">
+                                <input type="date" value={docForm.validUntil} onChange={(e) => setDocForm({ ...docForm, validUntil: e.target.value })} className={`w-full ${inputClass}`} />
+                              </Field>
+                            </div>
+                            <Field label="Datei">
+                              <input required type="file" accept=".pdf,image/*" onChange={(e) => setDocFile(e.target.files?.[0] ?? null)} className="text-xs text-muted" />
+                            </Field>
+                            <button type="submit" disabled={docUploading} className="px-4 py-2 rounded-full text-xs font-medium bg-gold text-bg disabled:opacity-60">
+                              {docUploading ? "Lade hoch…" : "Hochladen"}
+                            </button>
+                          </form>
+                        </div>
+
                         <div>
                           <h5 className="text-sm text-ivory font-medium mb-2">Inaktive / abgelaufene Produkte</h5>
                           {c.customer_products?.filter((cp: any) => !cp.active).length > 0 ? (

@@ -361,6 +361,27 @@ Zusätzlich in Supabase ausführen: `supabase/migration_17_session_trainer.sql`
   Trainerin sieht den Termin in ihrem eigenen Bereich und kann dort die
   Anwesenheit erfassen.
 
+## Phase 5 – Dokumente & Nachweise mit Laufzeit (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_18_documents.sql`
+(legt die Tabelle und den privaten Storage-Bucket `customer-documents` an)
+
+- Im Reiter **Schüler:innen → "Details"** gibt es jetzt den Bereich
+  **"Dokumente & Nachweise"**: PDF oder Bild hochladen (max. 10 MB), mit Titel,
+  Art (Ermäßigungsnachweis, Einverständniserklärung, Gesundheitsnachweis,
+  Sonstiges) und Gültigkeitszeitraum.
+- Abgelaufene Nachweise werden rot mit "ABGELAUFEN" markiert; die Gültigkeit
+  lässt sich direkt in der Liste verlängern, ohne neu hochzuladen.
+- Die Dateien liegen in einem **privaten** Bucket und sind nie öffentlich
+  abrufbar. Zum Ansehen erzeugt die App einen signierten Link, der nach
+  60 Sekunden abläuft.
+- Hochladen, Ändern und Löschen von Dokumenten landet im Änderungslog.
+
+**Praxishinweis:** Das ergänzt die Ermäßigungs-Checkbox bei der Produktzuweisung
+— dort hakst du "Ermäßigt" an, hier liegt der zugehörige Nachweis mit seiner
+Laufzeit. Beides ist bewusst getrennt, damit ein abgelaufener Nachweis nicht
+automatisch eine laufende Karte entwertet.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 
