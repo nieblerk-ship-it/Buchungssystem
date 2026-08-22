@@ -90,8 +90,11 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log" | "sperren">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log" | "sperren" | "einstellungen">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
+  const [hiddenAlertTypes, setHiddenAlertTypes] = useState<string[]>([]);
+  const [settings, setSettings] = useState<any>(null);
+  const [settingsForm, setSettingsForm] = useState<any>(null);
   const [trainers, setTrainers] = useState<any[]>([]);
   const [newTrainer, setNewTrainer] = useState({ name: "", email: "", newPassword: "" });
   const [resetPasswordFor, setResetPasswordFor] = useState<string | null>(null);
@@ -181,7 +184,7 @@ export default function AdminPage() {
   const [logLoading, setLogLoading] = useState(false);
 
   async function loadAll() {
-    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes(), loadLocks()]);
+    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes(), loadLocks(), loadSettings()]);
   }
 
   useEffect(() => {
@@ -260,6 +263,23 @@ export default function AdminPage() {
     const data = await res.json();
     if (res.ok) setTrainers(data.trainers);
   }
+  async function loadSettings() {
+    const res = await fetch(`/api/admin/settings`);
+    const data = await res.json();
+    if (res.ok) { setSettings(data.settings); setSettingsForm(data.settings); }
+  }
+  async function saveSettings(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/settings", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settingsForm),
+    });
+    setSaving(false);
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadSettings();
+  }
+
   async function loadLocks() {
     const res = await fetch(`/api/admin/calendar-locks`);
     const data = await res.json();
@@ -885,6 +905,9 @@ export default function AdminPage() {
         const data = await res.json();
         setSaving(false);
         if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+        if (data.warning) {
+          askConfirm("Hinweis zur Laufzeit", data.warning, "Verstanden", () => {});
+        }
         await openEnrollPanel(enrollPanelFor!);
         await loadSessions();
       }
@@ -1050,6 +1073,7 @@ export default function AdminPage() {
           { id: "meldungen", label: "Meldungen" },
           { id: "sperren", label: "Kalender-Sperren" },
           { id: "log", label: "Änderungslog" },
+          { id: "einstellungen", label: "Einstellungen" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`px-4 py-2 text-sm rounded-full ${tab === t.id ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
@@ -1136,7 +1160,16 @@ export default function AdminPage() {
                 onClick={() => {
                   setShowCourseForm((v) => !v);
                   if (!showCourseForm) {
-                    setNewCourse({ ...EMPTY_COURSE, startDate: formatDateOnly(weekStart), endDate: formatDateOnly(addDays(weekStart, 6)), singleDate: formatDateOnly(weekStart) });
+                    setNewCourse({
+                      ...EMPTY_COURSE,
+                      capacity: settings?.default_capacity ?? EMPTY_COURSE.capacity,
+                      duration_minutes: settings?.default_duration_minutes ?? EMPTY_COURSE.duration_minutes,
+                      room: settings?.default_room ?? EMPTY_COURSE.room,
+                      category: settings?.default_category ?? EMPTY_COURSE.category,
+                      startDate: formatDateOnly(weekStart),
+                      endDate: formatDateOnly(addDays(weekStart, 6)),
+                      singleDate: formatDateOnly(weekStart),
+                    });
                   }
                 }}
                 className={`ml-2 w-9 h-9 rounded-full border flex items-center justify-center text-lg ${showCourseForm ? "bg-gold text-bg border-gold" : "border-gold text-gold"}`}
@@ -2163,7 +2196,7 @@ export default function AdminPage() {
 
       {tab === "meldungen" && (() => {
         const todayStr = formatDateOnly(today);
-        const alerts: { severity: "rot" | "gelb"; type: string; message: string; key: string }[] = [];
+        const alerts: { severity: "rot" | "gelb"; type: string; message: string; key: string; sessionId?: string; goTo?: "anmeldungen" | "schueler" }[] = [];
 
         // Raum-Doppelbelegung: gleicher Raum, gleicher Tag, überlappende Zeiten
         function minutesOf(t: string) {
@@ -2185,7 +2218,7 @@ export default function AdminPage() {
                 alerts.push({
                   severity: "rot", type: "Raum doppelt belegt",
                   message: `${a.room} am ${a.date}: "${a.courseName}" (${a.time?.slice(0, 5)}) und "${b.courseName}" (${b.time?.slice(0, 5)}) überschneiden sich`,
-                  key: `room-${key}-${a.id}-${b.id}`,
+                  key: `room-${key}-${a.id}-${b.id}`, sessionId: a.id, goTo: "anmeldungen",
                 });
               }
             }
@@ -2198,7 +2231,7 @@ export default function AdminPage() {
             alerts.push({
               severity: "rot", type: "Überbuchung",
               message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): ${confirmedN}/${s.capacity} Plätze belegt`,
-              key: `ob-${s.id}`,
+              key: `ob-${s.id}`, sessionId: s.id, goTo: "anmeldungen",
             });
           }
           const confirmedParticipants = s.participants.filter((p: any) => p.status === "confirmed");
@@ -2206,19 +2239,22 @@ export default function AdminPage() {
             alerts.push({
               severity: "gelb", type: "Anwesenheit fehlt",
               message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): Anwesenheit noch nicht vollständig erfasst`,
-              key: `att-${s.id}`,
+              key: `att-${s.id}`, sessionId: s.id, goTo: "anmeldungen",
             });
           }
           s.participants.forEach((p: any, i: number) => {
             if (p.notes) {
-              alerts.push({ severity: "gelb", type: "Kommentar", message: `${p.name} – ${s.courseName} (${s.date}): "${p.notes}"`, key: `note-${s.id}-${i}` });
+              alerts.push({ severity: "gelb", type: "Kommentar", message: `${p.name} – ${s.courseName} (${s.date}): "${p.notes}"`, key: `note-${s.id}-${i}`, sessionId: s.id, goTo: "anmeldungen" });
             }
             if (p.status === "confirmed" && !p.hasActiveProduct && !p.accountDeleted) {
-              alerts.push({ severity: "gelb", type: "Kein aktives Produkt", message: `${p.name} – ${s.courseName} (${s.date})`, key: `prod-${s.id}-${i}` });
+              alerts.push({ severity: "gelb", type: "Kein aktives Produkt", message: `${p.name} – ${s.courseName} (${s.date})`, key: `prod-${s.id}-${i}`, sessionId: s.id, goTo: "anmeldungen" });
             }
           });
         });
-        const filtered = alerts.filter((a) => alertFilter === "alle" || a.severity === alertFilter);
+        const allTypes = Array.from(new Set(alerts.map((a) => a.type))).sort();
+        const filtered = alerts
+          .filter((a) => alertFilter === "alle" || a.severity === alertFilter)
+          .filter((a) => !hiddenAlertTypes.includes(a.type));
         return (
           <div className="space-y-4">
             <div className="flex gap-2">
@@ -2229,6 +2265,33 @@ export default function AdminPage() {
                 </button>
               ))}
             </div>
+
+            {allTypes.length > 0 && (
+              <div className="rounded-xl p-3 border border-border bg-surface">
+                <p className="text-xs text-muted mb-2">Meldungsarten anzeigen:</p>
+                <div className="flex flex-wrap gap-2">
+                  {allTypes.map((t) => {
+                    const hidden = hiddenAlertTypes.includes(t);
+                    const count = alerts.filter((a) => a.type === t).length;
+                    return (
+                      <button
+                        key={t}
+                        onClick={() => setHiddenAlertTypes((prev) => hidden ? prev.filter((x) => x !== t) : [...prev, t])}
+                        className={`text-xs px-3 py-1.5 rounded-full border ${hidden ? "border-border text-muted/50 line-through" : "border-gold text-gold"}`}
+                      >
+                        {t} ({count})
+                      </button>
+                    );
+                  })}
+                  {hiddenAlertTypes.length > 0 && (
+                    <button onClick={() => setHiddenAlertTypes([])} className="text-xs px-3 py-1.5 rounded-full border border-border text-muted">
+                      Alle einblenden
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {filtered.length === 0 ? (
               <p className="text-sm text-muted">Keine Meldungen.</p>
             ) : (
@@ -2237,6 +2300,20 @@ export default function AdminPage() {
                   <li key={a.key} className={`rounded-xl p-4 border-l-4 bg-surface text-sm text-ivory ${a.severity === "rot" ? "border-red-500" : "border-yellow-400"}`}>
                     <span className={`text-xs font-semibold mr-2 ${a.severity === "rot" ? "text-red-500" : "text-yellow-400"}`}>{a.type}</span>
                     {a.message}
+                    {a.sessionId && (
+                      <button
+                        onClick={() => {
+                          const target = sessions.find((s) => s.id === a.sessionId);
+                          if (target) setWeekStart(getMonday(new Date(target.date + "T00:00:00")));
+                          setSelectedSessionId(a.sessionId!);
+                          setShowInactive(true);
+                          setTab("anmeldungen");
+                        }}
+                        className="ml-2 text-xs text-gold underline"
+                      >
+                        zum Termin
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -2244,6 +2321,45 @@ export default function AdminPage() {
           </div>
         );
       })()}
+
+      {tab === "einstellungen" && (
+        <div className="space-y-6">
+          <form onSubmit={saveSettings} className="rounded-2xl p-5 border border-border bg-surface space-y-3 max-w-2xl">
+            <h3 className="font-display text-lg text-ivory mb-1">Standardeinstellungen für neue Kurse</h3>
+            <p className="text-xs text-muted mb-2">
+              Diese Werte sind beim Anlegen eines neuen Kurses vorausgefüllt und lassen sich dort jederzeit
+              überschreiben. Wählst du beim Anlegen eine bestehende Kursbezeichnung, gewinnen deren eigene
+              Vorgaben (Kapazität, Dauer) — sonst greifen die Werte hier.
+            </p>
+            {settingsForm && (
+              <>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <Field label="Kapazität (Anzahl Plätze)">
+                    <input type="number" value={settingsForm.default_capacity} onChange={(e) => setSettingsForm({ ...settingsForm, default_capacity: Number(e.target.value) })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Dauer (Minuten)">
+                    <input type="number" value={settingsForm.default_duration_minutes} onChange={(e) => setSettingsForm({ ...settingsForm, default_duration_minutes: Number(e.target.value) })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Raum">
+                    <select value={settingsForm.default_room ?? ""} onChange={(e) => setSettingsForm({ ...settingsForm, default_room: e.target.value })} className={`w-full ${inputClass}`}>
+                      <option value="">— keiner —</option>
+                      {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Kategorie">
+                    <select value={settingsForm.default_category} onChange={(e) => setSettingsForm({ ...settingsForm, default_category: e.target.value })} className={`w-full ${inputClass}`}>
+                      {COURSE_CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                  {saving ? "Speichere…" : "Einstellungen speichern"}
+                </button>
+              </>
+            )}
+          </form>
+        </div>
+      )}
 
       {tab === "sperren" && (
         <div className="space-y-6">

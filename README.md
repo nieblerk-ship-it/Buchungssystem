@@ -382,6 +382,24 @@ Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_18_document
 Laufzeit. Beides ist bewusst getrennt, damit ein abgelaufener Nachweis nicht
 automatisch eine laufende Karte entwertet.
 
+## Phase G – Kleine Verbesserungen (Update)
+
+Zusätzlich in Supabase ausführen: `supabase/migration_19_settings.sql`
+
+- **Neuer Reiter "Einstellungen"**: studioweite Standardwerte für Kapazität,
+  Dauer, Raum und Kategorie. Sie füllen das Formular beim Kurs-Anlegen vor.
+  Wählst du dort eine bestehende Kursbezeichnung, gewinnen weiterhin deren
+  eigene Vorgaben.
+- **Meldungen sind klickbar**: Über "zum Termin" springst du direkt zur
+  richtigen Woche, der Termin öffnet sich, abgesagte/beendete werden dabei
+  automatisch eingeblendet.
+- **Filter nach Meldungsart**: Jede Art lässt sich einzeln ab- und anwählen
+  (mit Anzahl daneben), zusätzlich zum bestehenden Rot/Gelb-Filter. So kannst
+  du dir z.B. nur "Anwesenheit fehlt" anzeigen lassen.
+- **Hinweis bei zu kurzer Kursreihe**: Reicht der gewünschte Zeitraum einer
+  festen Zuteilung über das Kursende hinaus, wird die Person bis zum Kursende
+  eingetragen und du bekommst einen Hinweis mit dem tatsächlichen Enddatum.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 

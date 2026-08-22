@@ -52,8 +52,24 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const bookedCount = await ensureEnrollmentBookings(db, courseId);
+
+  // Hinweis, falls der Kurs kürzer läuft als der gewünschte Zeitraum
+  let warning: string | null = null;
+  if (valid_until) {
+    const { data: lastSession } = await db
+      .from("course_sessions")
+      .select("session_date")
+      .eq("course_id", courseId)
+      .order("session_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastSession?.session_date && lastSession.session_date < valid_until) {
+      warning = `Hinweis: Der Kurs läuft nur bis zum ${lastSession.session_date}, der gewünschte Zeitraum reicht aber bis ${valid_until}. Die Person wurde bis zum Kursende eingetragen.`;
+    }
+  }
+
   await logAction(admin, "create", "enrollment", data.id, `Feste Zuteilung angelegt (Kurs-ID ${courseId}, ${bookedCount} Termine gebucht)`);
-  return NextResponse.json({ id: data.id, bookedCount });
+  return NextResponse.json({ id: data.id, bookedCount, warning });
 }
 
 // DELETE /api/admin/enrollments?id=...
