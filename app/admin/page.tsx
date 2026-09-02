@@ -90,7 +90,7 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "vertretungen" | "stunden" | "log" | "einstellungen">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "vertretungen" | "stunden" | "ablage" | "log" | "einstellungen">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [hiddenAlertTypes, setHiddenAlertTypes] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
@@ -101,6 +101,17 @@ export default function AdminPage() {
   const [hoursFilter, setHoursFilter] = useState({ from: "", to: "", trainerId: "" });
   const [hoursLoading, setHoursLoading] = useState(false);
   const [expandedHours, setExpandedHours] = useState<string | null>(null);
+  const [archiveDocs, setArchiveDocs] = useState<any[]>([]);
+  const [archiveLabels, setArchiveLabels] = useState<any[]>([]);
+  const [archiveFilter, setArchiveFilter] = useState({ labelId: "", trainerId: "", from: "", to: "", search: "" });
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadForm, setUploadForm] = useState<any>({ title: "", description: "", trainerId: "", periodFrom: "", periodTo: "", labelIds: [] as string[] });
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [showLabelEditor, setShowLabelEditor] = useState(false);
+  const [newLabel, setNewLabel] = useState({ name: "", color: "#C9A227" });
+  const [editDoc, setEditDoc] = useState<any>(null);
   const [newTrainer, setNewTrainer] = useState({ name: "", email: "", newPassword: "" });
   const [resetPasswordFor, setResetPasswordFor] = useState<string | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = useState("");
@@ -206,6 +217,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (tab === "log" && unlocked) loadLog();
     if (tab === "stunden" && unlocked && !hours) loadHours();
+    if (tab === "ablage" && unlocked && archiveLabels.length === 0) { loadArchiveLabels(); loadArchive(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -282,6 +294,116 @@ export default function AdminPage() {
     setSaving(false);
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadSettings();
+  }
+
+  // ---- Dokumentenablage ----
+  function archiveParams() {
+    const p = new URLSearchParams();
+    if (archiveFilter.labelId) p.set("labelId", archiveFilter.labelId);
+    if (archiveFilter.trainerId) p.set("trainerId", archiveFilter.trainerId);
+    if (archiveFilter.from) p.set("from", archiveFilter.from);
+    if (archiveFilter.to) p.set("to", archiveFilter.to);
+    if (archiveFilter.search) p.set("search", archiveFilter.search);
+    return p;
+  }
+  async function loadArchive() {
+    setArchiveLoading(true); setActionError(null);
+    const res = await fetch(`/api/admin/archive?${archiveParams().toString()}`);
+    const data = await res.json();
+    setArchiveLoading(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setArchiveDocs(data.documents ?? []);
+  }
+  async function loadArchiveLabels() {
+    const res = await fetch("/api/admin/document-labels");
+    const data = await res.json();
+    if (res.ok) setArchiveLabels(data.labels ?? []);
+  }
+  async function uploadArchiveDoc() {
+    if (!uploadFile || !uploadForm.title.trim()) { setActionError("Bitte Datei und Titel angeben."); return; }
+    setUploading(true); setActionError(null);
+    const fd = new FormData();
+    fd.append("file", uploadFile);
+    fd.append("title", uploadForm.title);
+    fd.append("description", uploadForm.description);
+    fd.append("trainerId", uploadForm.trainerId);
+    fd.append("periodFrom", uploadForm.periodFrom);
+    fd.append("periodTo", uploadForm.periodTo);
+    fd.append("labelIds", JSON.stringify(uploadForm.labelIds));
+    const res = await fetch("/api/admin/archive", { method: "POST", body: fd });
+    setUploading(false);
+    if (!res.ok) { setActionError((await res.json()).error ?? "Upload fehlgeschlagen."); return; }
+    setShowUpload(false); setUploadFile(null);
+    setUploadForm({ title: "", description: "", trainerId: "", periodFrom: "", periodTo: "", labelIds: [] });
+    await loadArchive();
+  }
+  async function openArchiveDoc(id: string) {
+    const res = await fetch(`/api/admin/archive/link?id=${id}`);
+    const data = await res.json();
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    window.open(data.url, "_blank");
+  }
+  async function saveArchiveDoc() {
+    if (!editDoc) return;
+    setActionError(null);
+    const res = await fetch("/api/admin/archive", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: editDoc.id, title: editDoc.title, description: editDoc.description,
+        trainerId: editDoc.trainerId ?? "", periodFrom: editDoc.periodFrom ?? "",
+        periodTo: editDoc.periodTo ?? "", labelIds: editDoc.labels.map((l: any) => l.id),
+      }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    setEditDoc(null); await loadArchive();
+  }
+  async function deleteArchiveDoc(id: string, title: string) {
+    askConfirm(
+      "Dokument löschen?",
+      `„${title}" wird endgültig aus der Ablage entfernt, samt Datei. Das lässt sich nicht rückgängig machen.`,
+      "Endgültig löschen",
+      async () => {
+        const res = await fetch(`/api/admin/archive?id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        setEditDoc(null); await loadArchive();
+      },
+      true
+    );
+  }
+  function downloadArchiveZip() {
+    window.location.href = `/api/admin/archive/zip?${archiveParams().toString()}`;
+  }
+  async function addLabel() {
+    if (!newLabel.name.trim()) return;
+    setActionError(null);
+    const res = await fetch("/api/admin/document-labels", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newLabel),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    setNewLabel({ name: "", color: "#C9A227" });
+    await loadArchiveLabels();
+  }
+  async function updateLabel(id: string, fields: any) {
+    const res = await fetch("/api/admin/document-labels", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, ...fields }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadArchiveLabels();
+  }
+  async function deleteLabel(id: string, name: string) {
+    askConfirm(
+      "Label löschen?",
+      `„${name}" verschwindet von allen Dokumenten, die es tragen. Die Dokumente selbst bleiben erhalten.`,
+      "Label löschen",
+      async () => {
+        const res = await fetch(`/api/admin/document-labels?id=${id}`, { method: "DELETE" });
+        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+        await Promise.all([loadArchiveLabels(), loadArchive()]);
+      },
+      true
+    );
   }
 
   async function loadHours() {
@@ -1085,6 +1207,7 @@ export default function AdminPage() {
           { id: "trainer", label: "Trainer:innen" },
           { id: "vertretungen", label: "Vertretungen" },
           { id: "stunden", label: "Stunden" },
+          { id: "ablage", label: "Ablage" },
           { id: "meldungen", label: "Meldungen" },
           { id: "log", label: "Änderungslog" },
           { id: "einstellungen", label: "Einstellungen" },
@@ -2248,6 +2371,236 @@ export default function AdminPage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {tab === "ablage" && (
+        <div className="space-y-5">
+          <div className="rounded-2xl p-5 border border-border bg-surface space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h3 className="font-display text-lg text-ivory">Dokumentenablage</h3>
+                <p className="text-xs text-muted">
+                  Rechnungen, Verträge, Konzepte — alles, was das Studio als Ganzes betrifft.
+                  Nachweise einzelner Schüler:innen liegen weiterhin in deren Akte.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowLabelEditor(!showLabelEditor)} className="px-4 py-2 rounded-full text-sm border border-border text-muted">
+                  Labels verwalten
+                </button>
+                <button onClick={() => setShowUpload(!showUpload)} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg">
+                  {showUpload ? "Abbrechen" : "Dokument hochladen"}
+                </button>
+              </div>
+            </div>
+
+            {showLabelEditor && (
+              <div className="rounded-xl p-4 border border-border bg-bg space-y-3">
+                <div className="flex gap-2 flex-wrap items-end">
+                  <Field label="Neues Label">
+                    <input value={newLabel.name} onChange={(e) => setNewLabel({ ...newLabel, name: e.target.value })} placeholder="z.B. Rechnung" className={inputClass} />
+                  </Field>
+                  <Field label="Farbe">
+                    <input type="color" value={newLabel.color} onChange={(e) => setNewLabel({ ...newLabel, color: e.target.value })} className="h-10 w-16 rounded-xl bg-bg border border-border" />
+                  </Field>
+                  <button onClick={addLabel} className="px-4 py-2.5 rounded-full text-sm font-medium bg-gold text-bg">Anlegen</button>
+                </div>
+                <ul className="space-y-2">
+                  {archiveLabels.map((l) => (
+                    <li key={l.id} className="flex items-center gap-2 flex-wrap">
+                      <input type="color" defaultValue={l.color} onBlur={(e) => e.target.value !== l.color && updateLabel(l.id, { color: e.target.value })} className="h-8 w-12 rounded-lg bg-bg border border-border" />
+                      <input defaultValue={l.name} onBlur={(e) => e.target.value.trim() && e.target.value !== l.name && updateLabel(l.id, { name: e.target.value })} className={`${inputClass} py-1.5`} />
+                      <button onClick={() => deleteLabel(l.id, l.name)} className="text-xs text-wine underline">löschen</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {showUpload && (
+              <div className="rounded-xl p-4 border border-border bg-bg space-y-3">
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <Field label="Datei (max. 25 MB)">
+                    <input type="file" onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)} className="w-full text-xs text-muted" />
+                  </Field>
+                  <Field label="Titel">
+                    <input value={uploadForm.title} onChange={(e) => setUploadForm({ ...uploadForm, title: e.target.value })} placeholder="z.B. Stromrechnung Juli 2026" className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Beschreibung (optional)">
+                    <input value={uploadForm.description} onChange={(e) => setUploadForm({ ...uploadForm, description: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Trainer:in (optional)">
+                    <select value={uploadForm.trainerId} onChange={(e) => setUploadForm({ ...uploadForm, trainerId: e.target.value })} className={`w-full ${inputClass}`}>
+                      <option value="">— keine —</option>
+                      {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Zeitraum von (optional)">
+                    <input type="date" value={uploadForm.periodFrom} onChange={(e) => setUploadForm({ ...uploadForm, periodFrom: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                  <Field label="Zeitraum bis (optional)">
+                    <input type="date" value={uploadForm.periodTo} onChange={(e) => setUploadForm({ ...uploadForm, periodTo: e.target.value })} className={`w-full ${inputClass}`} />
+                  </Field>
+                </div>
+                <div>
+                  <p className="text-xs text-muted mb-1">Labels</p>
+                  <div className="flex gap-2 flex-wrap">
+                    {archiveLabels.map((l) => {
+                      const on = uploadForm.labelIds.includes(l.id);
+                      return (
+                        <button key={l.id}
+                          onClick={() => setUploadForm({
+                            ...uploadForm,
+                            labelIds: on ? uploadForm.labelIds.filter((x: string) => x !== l.id) : [...uploadForm.labelIds, l.id],
+                          })}
+                          className={`px-3 py-1 rounded-full text-xs border ${on ? "text-bg font-medium" : "text-muted border-border"}`}
+                          style={on ? { background: l.color, borderColor: l.color } : undefined}>
+                          {l.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <button onClick={uploadArchiveDoc} disabled={uploading} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                  {uploading ? "Lade hoch…" : "Hochladen"}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl p-5 border border-border bg-surface space-y-3">
+            <div className="grid sm:grid-cols-5 gap-3">
+              <Field label="Label">
+                <select value={archiveFilter.labelId} onChange={(e) => setArchiveFilter({ ...archiveFilter, labelId: e.target.value })} className={`w-full ${inputClass}`}>
+                  <option value="">— alle —</option>
+                  {archiveLabels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Trainer:in">
+                <select value={archiveFilter.trainerId} onChange={(e) => setArchiveFilter({ ...archiveFilter, trainerId: e.target.value })} className={`w-full ${inputClass}`}>
+                  <option value="">— alle —</option>
+                  {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Zeitraum von">
+                <input type="date" value={archiveFilter.from} onChange={(e) => setArchiveFilter({ ...archiveFilter, from: e.target.value })} className={`w-full ${inputClass}`} />
+              </Field>
+              <Field label="Zeitraum bis">
+                <input type="date" value={archiveFilter.to} onChange={(e) => setArchiveFilter({ ...archiveFilter, to: e.target.value })} className={`w-full ${inputClass}`} />
+              </Field>
+              <Field label="Suche">
+                <input value={archiveFilter.search} onChange={(e) => setArchiveFilter({ ...archiveFilter, search: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && loadArchive()} placeholder="Titel, Beschreibung, Datei" className={`w-full ${inputClass}`} />
+              </Field>
+            </div>
+            <div className="flex gap-2 flex-wrap items-center">
+              <button onClick={loadArchive} disabled={archiveLoading} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                {archiveLoading ? "Lade…" : "Filtern"}
+              </button>
+              <button onClick={() => { setArchiveFilter({ labelId: "", trainerId: "", from: "", to: "", search: "" }); }} className="text-xs text-muted underline">
+                Filter zurücksetzen
+              </button>
+              <button onClick={downloadArchiveZip} disabled={archiveDocs.length === 0} className="ml-auto px-4 py-2 rounded-full text-sm border border-gold text-gold disabled:opacity-40">
+                Gefilterte als ZIP ({archiveDocs.length})
+              </button>
+            </div>
+            <p className="text-xs text-muted">
+              Der Zeitraumfilter greift nur bei Dokumenten, denen du einen Zeitraum gegeben hast —
+              zeitlose Dokumente tauchen dann nicht auf.
+            </p>
+          </div>
+
+          {archiveDocs.length === 0 ? (
+            <p className="text-sm text-muted">Keine Dokumente{archiveLoading ? "…" : " für diese Filter."}</p>
+          ) : (
+            <ul className="space-y-2">
+              {archiveDocs.map((d) => (
+                <li key={d.id} className="rounded-2xl p-4 border border-border bg-surface">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <p className="text-sm text-ivory">{d.title}</p>
+                      {d.description && <p className="text-xs text-muted mt-0.5">{d.description}</p>}
+                      <p className="text-xs text-muted mt-0.5">
+                        {d.fileName}
+                        {d.fileSize ? ` · ${Math.round(d.fileSize / 1024)} KB` : ""}
+                        {d.periodFrom || d.periodTo ? ` · ${d.periodFrom ?? "…"} bis ${d.periodTo ?? "…"}` : ""}
+                        {d.trainerName ? ` · ${d.trainerName}` : ""}
+                      </p>
+                      {d.labels.length > 0 && (
+                        <div className="flex gap-1.5 flex-wrap mt-1.5">
+                          {d.labels.map((l: any) => (
+                            <span key={l.id} className="px-2 py-0.5 rounded-full text-[10px] text-bg font-medium" style={{ background: l.color }}>
+                              {l.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => openArchiveDoc(d.id)} className="text-xs text-gold underline">öffnen</button>
+                      <button onClick={() => setEditDoc(editDoc?.id === d.id ? null : { ...d })} className="text-xs text-muted underline">
+                        {editDoc?.id === d.id ? "schließen" : "bearbeiten"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {editDoc?.id === d.id && (
+                    <div className="mt-4 pt-4 border-t border-border space-y-3">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <Field label="Titel">
+                          <input value={editDoc.title} onChange={(e) => setEditDoc({ ...editDoc, title: e.target.value })} className={`w-full ${inputClass}`} />
+                        </Field>
+                        <Field label="Beschreibung">
+                          <input value={editDoc.description ?? ""} onChange={(e) => setEditDoc({ ...editDoc, description: e.target.value })} className={`w-full ${inputClass}`} />
+                        </Field>
+                        <Field label="Trainer:in">
+                          <select value={editDoc.trainerId ?? ""} onChange={(e) => setEditDoc({ ...editDoc, trainerId: e.target.value })} className={`w-full ${inputClass}`}>
+                            <option value="">— keine —</option>
+                            {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </select>
+                        </Field>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Field label="Von">
+                            <input type="date" value={editDoc.periodFrom ?? ""} onChange={(e) => setEditDoc({ ...editDoc, periodFrom: e.target.value })} className={`w-full ${inputClass}`} />
+                          </Field>
+                          <Field label="Bis">
+                            <input type="date" value={editDoc.periodTo ?? ""} onChange={(e) => setEditDoc({ ...editDoc, periodTo: e.target.value })} className={`w-full ${inputClass}`} />
+                          </Field>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted mb-1">Labels</p>
+                        <div className="flex gap-2 flex-wrap">
+                          {archiveLabels.map((l) => {
+                            const on = editDoc.labels.some((x: any) => x.id === l.id);
+                            return (
+                              <button key={l.id}
+                                onClick={() => setEditDoc({
+                                  ...editDoc,
+                                  labels: on ? editDoc.labels.filter((x: any) => x.id !== l.id) : [...editDoc.labels, l],
+                                })}
+                                className={`px-3 py-1 rounded-full text-xs border ${on ? "text-bg font-medium" : "text-muted border-border"}`}
+                                style={on ? { background: l.color, borderColor: l.color } : undefined}>
+                                {l.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="flex gap-3 items-center">
+                        <button onClick={saveArchiveDoc} className="px-5 py-2 rounded-full text-sm font-medium bg-gold text-bg">Speichern</button>
+                        <button onClick={() => deleteArchiveDoc(d.id, d.title)} className="text-xs text-wine underline">Dokument löschen</button>
+                        <span className="text-xs text-muted ml-auto">
+                          hochgeladen {new Date(d.createdAt).toLocaleDateString("de-DE")}{d.uploadedByName ? ` von ${d.uploadedByName}` : ""}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

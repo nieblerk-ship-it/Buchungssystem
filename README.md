@@ -501,6 +501,38 @@ Termine, bei denen niemand eingetragen ist („nicht besetzt"). Die letzte Zeile
 ist bewusst dabei — so ergibt die Summe aller Zeilen immer die tatsächliche
 Anzahl der Termine im Zeitraum, und Lücken fallen beim Abrechnen auf.
 
+## Phase I2 – Dokumentenablage mit Labels (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_23_document_archive.sql`
+**`npm install` ist diesmal nötig** — neue Abhängigkeit `jszip` für den ZIP-Download.
+
+Neuer Reiter **„Ablage"** im Admin-Bereich. Das ist die Studioablage für alles,
+was das Studio als Ganzes betrifft: Rechnungen, Verträge, Versicherungen,
+Konzepte. Nachweise einzelner Schüler:innen bleiben bewusst dort, wo sie sind —
+in der Schülerakte unter „Details", in einem eigenen Bucket.
+
+- **Labels statt fester Kategorien**: frei anlegbar mit Name und Farbe,
+  „Rechnung" ist einfach eines davon. Ein Dokument kann mehrere Labels tragen
+  (z.B. „Rechnung" + „Versicherung"). Umbenennen und Umfärben wirkt sofort
+  überall. Wird ein Label gelöscht, verschwindet es von allen Dokumenten —
+  die Dokumente selbst bleiben unangetastet.
+  Vier Labels sind als Startpunkt angelegt und können umbenannt oder gelöscht werden.
+- **Optionale Zuordnung** zu einer Trainer:in und zu einem Zeitraum.
+- **Filter** nach Label, Trainer:in und Zeitraum, dazu eine Volltextsuche über
+  Titel, Beschreibung und Dateiname.
+- **ZIP-Download** genau der gefilterten Menge. Die Dateien bekommen im Archiv
+  sprechende Namen (Zeitraum bzw. Uploaddatum vorne), damit sie im Ordner
+  sinnvoll sortiert liegen. Grenzen: 200 Dateien und 200 MB pro Download.
+- Dateien liegen im **privaten** Bucket `studio-documents`, maximal 25 MB pro
+  Datei. Zum Ansehen erzeugt die App einen signierten Link, der nach
+  60 Sekunden abläuft — gleiche Logik wie bei den Schülerdokumenten.
+- Hochladen, Ändern, Löschen und ZIP-Downloads landen im Änderungslog.
+
+**Zum Zeitraumfilter:** Er greift nur bei Dokumenten, denen ein Zeitraum
+zugewiesen wurde. Zeitlose Dokumente (ein unbefristeter Mietvertrag etwa)
+tauchen bei einer Monatsauswahl bewusst nicht auf — sonst würde jede
+Monatsabfrage die gesamte Ablage mitziehen.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 
