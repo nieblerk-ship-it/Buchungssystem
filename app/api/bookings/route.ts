@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { canBookCourse } from "@/lib/eligibility";
 import { statusForNewBooking } from "@/lib/waitlist";
-import { isDateLocked } from "@/lib/calendarLock";
 
 // POST /api/bookings
 // body: { courseSessionId: string, name: string, email: string }
@@ -29,10 +28,6 @@ export async function POST(req: Request) {
   if (session.cancelled) {
     return NextResponse.json({ error: "Dieser Termin wurde abgesagt." }, { status: 409 });
   }
-  if (await isDateLocked(db, session.session_date)) {
-    return NextResponse.json({ error: "Für diesen Termin sind keine Anmeldungen mehr möglich." }, { status: 423 });
-  }
-
   const capacity = session.capacity_override ?? (session.course as any)?.capacity ?? 0;
 
   // Kund:in finden oder anlegen

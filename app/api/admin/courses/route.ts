@@ -3,7 +3,6 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { requireAdmin } from "@/lib/adminAuth";
 import { logAction } from "@/lib/auditLog";
 import { ensureEnrollmentBookings } from "@/lib/enrollments";
-import { isDateLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 // GET /api/admin/courses
 // Liefert ALLE Kurse (auch inaktive) inkl. ihrer Bezeichnung.
@@ -173,9 +172,6 @@ export async function PATCH(req: Request) {
       return NextResponse.json({
         error: "Eine Änderung ab einem vergangenen Termin ist nicht möglich — sonst würde sich die bereits dokumentierte Vergangenheit ändern. Nutze \"Ab heute\" oder wähle einen künftigen Termin.",
       }, { status: 400 });
-    }
-    if (await isDateLocked(db, splitFrom)) {
-      return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
     }
     return await splitCourse(db, admin, id, before, splitFrom, { courseTypeId, newTypeName, endDate, ...fields });
   }

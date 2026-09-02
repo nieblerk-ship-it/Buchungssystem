@@ -3,7 +3,6 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { requireAdmin } from "@/lib/adminAuth";
 import { logAction } from "@/lib/auditLog";
 import { promoteFromWaitlist } from "@/lib/waitlist";
-import { isSessionLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 // POST /api/admin/sessions/roster
 // body: { sessionId, entries: [
@@ -27,10 +26,6 @@ export async function POST(req: Request) {
   }
 
   const db = supabaseAdmin();
-
-  if (await isSessionLocked(db, sessionId)) {
-    return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
-  }
 
   for (const entry of entries) {
     const { bookingId, customerId, newCustomerName, newCustomerEmail, targetStatus } = entry;

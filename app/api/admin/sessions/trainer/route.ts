@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { requireAdmin } from "@/lib/adminAuth";
 import { logAction } from "@/lib/auditLog";
-import { isDateLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -33,10 +32,6 @@ export async function POST(req: Request) {
     .eq("id", sessionId)
     .maybeSingle();
   if (!session) return NextResponse.json({ error: "Termin nicht gefunden." }, { status: 404 });
-
-  if (await isDateLocked(db, session.session_date)) {
-    return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
-  }
 
   const fields = {
     trainer_id: trainerId || null,
@@ -89,11 +84,6 @@ export async function DELETE(req: Request) {
   if (!sessionId) return NextResponse.json({ error: "Termin fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
-  const { data: session } = await db.from("course_sessions").select("session_date").eq("id", sessionId).maybeSingle();
-  if (session && await isDateLocked(db, session.session_date)) {
-    return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
-  }
-
   const { error } = await db.from("course_sessions").update({ trainer_id: null, instructor: null }).eq("id", sessionId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   await logAction(admin, "substitute-remove", "session", sessionId, "Vertretung aufgehoben");

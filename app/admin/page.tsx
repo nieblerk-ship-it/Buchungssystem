@@ -90,7 +90,7 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log" | "sperren" | "einstellungen">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log" | "einstellungen">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [hiddenAlertTypes, setHiddenAlertTypes] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
@@ -119,8 +119,6 @@ export default function AdminPage() {
   const [newCourse, setNewCourse] = useState<any>(EMPTY_COURSE);
   const [showCourseForm, setShowCourseForm] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
-  const [locks, setLocks] = useState<any[]>([]);
-  const [lockForm, setLockForm] = useState({ startDate: "", endDate: "", reason: "" });
   const [courseTypes, setCourseTypes] = useState<any[]>([]);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [editCourse, setEditCourse] = useState<any>(null);
@@ -184,7 +182,7 @@ export default function AdminPage() {
   const [logLoading, setLogLoading] = useState(false);
 
   async function loadAll() {
-    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes(), loadLocks(), loadSettings()]);
+    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes(), loadSettings()]);
   }
 
   useEffect(() => {
@@ -280,42 +278,6 @@ export default function AdminPage() {
     await loadSettings();
   }
 
-  async function loadLocks() {
-    const res = await fetch(`/api/admin/calendar-locks`);
-    const data = await res.json();
-    if (res.ok) setLocks(data.locks);
-  }
-  async function createLock(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true); setActionError(null);
-    const res = await fetch("/api/admin/calendar-locks", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(lockForm),
-    });
-    const data = await res.json();
-    setSaving(false);
-    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
-    setLockForm({ startDate: "", endDate: "", reason: "" });
-    await loadLocks();
-  }
-  function removeLock(id: string, from: string, to: string) {
-    askConfirm(
-      "Sperre aufheben",
-      `Die Sperre für ${from} bis ${to} aufheben? Danach sind in diesem Zeitraum wieder Änderungen an Buchungen, Anwesenheiten und Terminen möglich.`,
-      "Sperre aufheben",
-      async () => {
-        setActionError(null);
-        const res = await fetch(`/api/admin/calendar-locks?id=${id}`, { method: "DELETE" });
-        if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
-        await loadLocks();
-      },
-      true
-    );
-  }
-  function isLocked(dateStr: string) {
-    return locks.some((l: any) => dateStr >= l.start_date && dateStr <= l.end_date);
-  }
-
   async function loadCourseTypes() {
     const res = await fetch(`/api/admin/course-types`);
     const data = await res.json();
@@ -353,6 +315,15 @@ export default function AdminPage() {
     });
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadSessions();
+  }
+  async function toggleTrainerRequired(courseTypeId: string, trainer_required: boolean) {
+    setActionError(null);
+    const res = await fetch("/api/admin/course-types", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: courseTypeId, trainer_required }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await loadCourseTypes(); await loadSessions();
   }
   async function saveBookingNote(bookingId: string, notes: string) {
     setActionError(null);
@@ -1071,7 +1042,6 @@ export default function AdminPage() {
           { id: "produkte", label: "Produkte" },
           { id: "trainer", label: "Trainer:innen" },
           { id: "meldungen", label: "Meldungen" },
-          { id: "sperren", label: "Kalender-Sperren" },
           { id: "log", label: "Änderungslog" },
           { id: "einstellungen", label: "Einstellungen" },
         ].map((t) => (
@@ -1197,7 +1167,6 @@ export default function AdminPage() {
                       <div className={`text-center mb-3 pb-2 border-b ${isToday ? "border-gold" : "border-border"}`}>
                         <div className={`font-display italic text-lg ${isToday ? "text-gold" : "text-ivory"}`}>{WEEKDAY_SHORT[day.getDay() === 0 ? 6 : day.getDay() - 1]}</div>
                         <div className="text-xs text-muted">{String(day.getDate()).padStart(2, "0")}.{String(day.getMonth() + 1).padStart(2, "0")}.</div>
-                        {isLocked(dateStr) && <div className="text-[10px] text-gold mt-0.5">gesperrt</div>}
                       </div>
                       <div className="space-y-2">
                         {list.length === 0 && <p className="text-xs text-muted text-center">–</p>}
@@ -1221,6 +1190,9 @@ export default function AdminPage() {
                               {s.cancelled && <div className="text-wine mt-0.5">abgesagt</div>}
                               {!s.courseActive && <div className="text-wine mt-0.5">Kurs beendet</div>}
                               {s.hasSubstitute && <div className="text-gold mt-0.5">Vertretung: {s.effectiveTrainerName ?? "andere Trainer:in"}</div>}
+                              {!s.cancelled && s.trainerRequired && !s.effectiveTrainerName && (
+                                <div className="text-yellow-400 mt-0.5">Trainer:in fehlt</div>
+                              )}
                             </button>
                           );
                         })}
@@ -1544,6 +1516,13 @@ export default function AdminPage() {
                   <h3 className="font-display text-lg text-ivory">
                     {selectedSession.courseName} {selectedSession.level ? `– ${selectedSession.level}` : ""} {selectedSession.room ? <span className="text-xs text-muted">· {selectedSession.room}</span> : null}
                     {selectedSession.cancelled && <span className="ml-2 text-xs text-wine">(abgesagt)</span>}
+                    {selectedSession.effectiveTrainerName ? (
+                      <span className="ml-2 text-xs text-muted">
+                        · {selectedSession.hasSubstitute ? "Vertretung: " : ""}{selectedSession.effectiveTrainerName}
+                      </span>
+                    ) : selectedSession.trainerRequired && !selectedSession.cancelled ? (
+                      <span className="ml-2 text-xs text-yellow-400">· Trainer:in fehlt</span>
+                    ) : null}
                   </h3>
                   <div className="flex items-center gap-3 flex-wrap">
                     <span className={`text-xs ${overbooked ? "text-red-500 font-bold" : "text-muted"}`}>
@@ -2225,6 +2204,33 @@ export default function AdminPage() {
           }
         });
 
+        // Trainer:in fehlt — nur bei Bezeichnungen, für die eine Trainer:in
+        // als erforderlich markiert ist.
+        //
+        // Sonderregel Openclass: eine Openclass läuft ohne eigene Anleitung,
+        // solange zeitgleich ein anderer Kurs mit Trainer:in im Studio
+        // stattfindet — dann ist jemand vor Ort und die Meldung entfällt.
+        function hasOverlappingStaffedCourse(s: any) {
+          const start = minutesOf(s.time), end = start + (s.durationMinutes ?? 70);
+          return sessions.some((o) => {
+            if (o.id === s.id || o.cancelled || o.date !== s.date) return false;
+            if (!o.effectiveTrainerName) return false;
+            const oStart = minutesOf(o.time), oEnd = oStart + (o.durationMinutes ?? 70);
+            return start < oEnd && oStart < end;
+          });
+        }
+        sessions
+          .filter((s) => !s.cancelled && s.trainerRequired && !s.effectiveTrainerName)
+          .forEach((s) => {
+            const isOpenclass = s.courseCategory === "Openclass";
+            if (isOpenclass && hasOverlappingStaffedCourse(s)) return;
+            alerts.push({
+              severity: "gelb", type: "Trainer:in fehlt",
+              message: `${s.courseName} am ${s.date} (${s.time?.slice(0, 5)}): keine Trainer:in eingetragen${isOpenclass ? " — auch kein zeitgleicher Kurs mit Trainer:in" : ""}`,
+              key: `notrainer-${s.id}`, sessionId: s.id, goTo: "anmeldungen",
+            });
+          });
+
         sessions.forEach((s) => {
           const confirmedN = confirmedCount(s);
           if (confirmedN > s.capacity) {
@@ -2358,53 +2364,32 @@ export default function AdminPage() {
               </>
             )}
           </form>
-        </div>
-      )}
 
-      {tab === "sperren" && (
-        <div className="space-y-6">
-          <form onSubmit={createLock} className="rounded-2xl p-5 border border-border bg-surface space-y-3">
-            <h3 className="font-display text-lg text-ivory mb-1">Zeitraum sperren</h3>
-            <p className="text-xs text-muted mb-2">
-              In einem gesperrten Zeitraum sind keine Änderungen mehr möglich: keine Anwesenheitserfassung,
-              keine Buchungsänderungen, keine Terminabsagen und keine Kursänderungen ab diesem Datum.
-              Gedacht für abgeschlossene Wochen oder Monate, damit rückwirkend nichts mehr verändert wird.
+          <div className="rounded-2xl p-5 border border-border bg-surface max-w-2xl">
+            <h3 className="font-display text-lg text-ivory mb-1">Trainer:in erforderlich</h3>
+            <p className="text-xs text-muted mb-4">
+              Ist der Haken gesetzt, erscheint jeder nicht abgesagte Termin dieser Bezeichnung ohne
+              eingetragene Trainer:in als Meldung im Reiter „Meldungen". Für eine Openclass gilt die
+              Sonderregel, dass ein zeitgleich laufender Kurs mit Trainer:in als abgedeckt zählt —
+              dann kommt keine Meldung. Änderungen wirken sofort, auch auf bereits angelegte Termine.
             </p>
-            <div className="grid sm:grid-cols-3 gap-3">
-              <Field label="Von (Datum)">
-                <input required type="date" value={lockForm.startDate} onChange={(e) => setLockForm({ ...lockForm, startDate: e.target.value })} className={`w-full ${inputClass}`} />
-              </Field>
-              <Field label="Bis (Datum, einschließlich)">
-                <input required type="date" value={lockForm.endDate} onChange={(e) => setLockForm({ ...lockForm, endDate: e.target.value })} className={`w-full ${inputClass}`} />
-              </Field>
-              <Field label="Grund (optional)">
-                <input placeholder="z.B. Monatsabschluss Juli" value={lockForm.reason} onChange={(e) => setLockForm({ ...lockForm, reason: e.target.value })} className={`w-full ${inputClass}`} />
-              </Field>
-            </div>
-            <button type="submit" disabled={saving} className="px-5 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
-              {saving ? "Speichere…" : "Zeitraum sperren"}
-            </button>
-          </form>
-
-          <div className="space-y-3">
-            <h3 className="font-display text-lg text-ivory">Aktive Sperren</h3>
-            {locks.length === 0 ? (
-              <p className="text-sm text-muted">Aktuell ist kein Zeitraum gesperrt.</p>
+            {courseTypes.filter((t: any) => t.active).length === 0 ? (
+              <p className="text-sm text-muted">Noch keine Kursbezeichnungen angelegt.</p>
             ) : (
-              locks.map((l: any) => (
-                <div key={l.id} className="rounded-2xl p-4 border border-border bg-surface flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <p className="text-sm text-ivory">{l.start_date} – {l.end_date}</p>
-                    <p className="text-xs text-muted mt-0.5">
-                      gesperrt von {l.locked_by_name} am {new Date(l.created_at).toLocaleDateString("de-DE")}
-                      {l.reason ? ` · ${l.reason}` : ""}
-                    </p>
-                  </div>
-                  <button onClick={() => removeLock(l.id, l.start_date, l.end_date)} className="text-xs px-3 py-1 rounded-full border border-border text-wine">
-                    Sperre aufheben
-                  </button>
-                </div>
-              ))
+              <ul className="space-y-1.5">
+                {courseTypes.filter((t: any) => t.active).map((t: any) => (
+                  <li key={t.id} className="flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={t.trainer_required ?? true}
+                      onChange={(e) => toggleTrainerRequired(t.id, e.target.checked)}
+                      className="accent-gold"
+                    />
+                    <span className="text-ivory">{t.name}</span>
+                    <span className="text-xs text-muted">{t.category}</span>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </div>

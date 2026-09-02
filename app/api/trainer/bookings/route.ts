@@ -5,7 +5,6 @@ import { supabaseAdmin } from "@/lib/supabase";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 import { verifyTrainerSession, TRAINER_COOKIE_NAME } from "@/lib/trainerAuth";
-import { isBookingLocked, LOCK_MESSAGE } from "@/lib/calendarLock";
 
 // GET /api/trainer/bookings
 // Liefert Termine der letzten 60 Tage bis unbegrenzt in die Zukunft, aber NUR
@@ -80,10 +79,6 @@ export async function PATCH(req: Request) {
   if (!bookingId) return NextResponse.json({ error: "Buchungs-ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
-
-  if (await isBookingLocked(db, bookingId)) {
-    return NextResponse.json({ error: LOCK_MESSAGE }, { status: 423 });
-  }
 
   // Sicherstellen, dass die Buchung wirklich zu einem eigenen Kurs gehört,
   // bevor etwas verändert wird.

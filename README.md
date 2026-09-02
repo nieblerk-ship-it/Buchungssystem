@@ -400,6 +400,27 @@ Zusätzlich in Supabase ausführen: `supabase/migration_19_settings.sql`
   festen Zuteilung über das Kursende hinaus, wird die Person bis zum Kursende
   eingetragen und du bekommst einen Hinweis mit dem tatsächlichen Enddatum.
 
+## Aufräumen: Kalender-Sperren entfernt, Trainer-Pflicht bleibt (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_21_remove_locks.sql`
+(`npm install` nicht nötig. `migration_20` ist damit hinfällig — nicht mehr ausführen.)
+
+- **Kalender-Sperren sind komplett entfernt.** Der Reiter „Kalender-Sperren"
+  ist weg, ebenso alle serverseitigen Prüfungen und die Tabelle
+  `calendar_locks`. Damit lassen sich Anwesenheiten, Buchungen und Termine
+  in der Vergangenheit wieder ohne Umweg korrigieren. Wer wann was geändert
+  hat, steht weiterhin vollständig im Änderungslog — die Nachvollziehbarkeit
+  hängt also nicht an den Sperren.
+- **Das Trainer-Notizfeld je Termin ist wieder entfernt** (Phase H1 zurückgenommen).
+  Für Anmerkungen zu einzelnen Personen bleibt das Kommentarfeld je Buchung.
+- **Trainer:in erforderlich bleibt**: im Reiter „Einstellungen" pro
+  Kursbezeichnung ein Haken. Ist er gesetzt, erscheint jeder nicht abgesagte
+  Termin ohne Trainer:in als gelbe Meldung „Trainer:in fehlt" und wird in der
+  Kalenderkachel markiert. Sonderregel Openclass: läuft zeitgleich ein anderer
+  Kurs mit Trainer:in, gilt der Termin als abgedeckt.
+- Der Kalender löst jetzt auch verknüpfte **Trainer-Konten** zum Namen auf,
+  nicht mehr nur das freie Textfeld.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 

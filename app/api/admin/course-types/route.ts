@@ -61,9 +61,16 @@ export async function PATCH(req: Request) {
   if (!id) return NextResponse.json({ error: "ID fehlt." }, { status: 400 });
 
   const db = supabaseAdmin();
+  const { data: before } = await db.from("course_types").select("name").eq("id", id).maybeSingle();
   const { error } = await db.from("course_types").update(fields).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  await logAction(admin, "update", "course_type", id, `Kursbezeichnung bearbeitet`);
+
+  const label = before?.name ? `"${before.name}"` : "Kursbezeichnung";
+  const description =
+    Object.keys(fields).length === 1 && fields.trainer_required !== undefined
+      ? `${label}: Trainer:in ${fields.trainer_required ? "erforderlich" : "nicht erforderlich"}`
+      : `Kursbezeichnung ${label} bearbeitet`;
+  await logAction(admin, "update", "course_type", id, description);
   return NextResponse.json({ ok: true });
 }
 
