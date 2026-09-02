@@ -421,6 +421,86 @@ Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_21_remove_l
 - Der Kalender löst jetzt auch verknüpfte **Trainer-Konten** zum Namen auf,
   nicht mehr nur das freie Textfeld.
 
+## Phase H2 – Vertretermanagement (Update)
+
+Zusätzlich in Supabase (SQL Editor) ausführen: `supabase/migration_22_substitute_requests.sql`
+(`npm install` nicht nötig.)
+
+**Ablauf in vier Schritten:**
+
+1. Eine Trainerin öffnet unter `/trainer` ihren Termin und klickt
+   **„Vertretung suchen"**, optional mit Grund. Möglich nur für Termine, die
+   sie selbst leitet, die nicht abgesagt sind und nicht in der Vergangenheit
+   liegen. Ist bereits eine Vertretung für den Termin eingetragen, darf die
+   Vertretung die Anfrage stellen — nicht mehr die ursprüngliche Trainerin.
+2. Alle anderen Trainerinnen sehen die Anfrage im neuen Bereich
+   **„Vertretungen"** (Umschalter oben im Trainer-Bereich, mit Zähler für
+   offene Anfragen), nach Datum sortiert, und tragen sich mit
+   **„Ich übernehme"** ein.
+3. Im Admin-Bereich erscheint das im neuen Reiter **„Vertretungen"** unter
+   „Wartet auf deine Bestätigung", ebenfalls mit Zähler am Reiter.
+4. Mit **„Bestätigen"** wird die Vertretung wirksam: sie wird als Trainer:in
+   genau dieses Termins eingetragen — technisch derselbe Weg wie
+   „Trainer:in ändern → nur dieser Termin". Dadurch greift alles Bestehende
+   automatisch: der Termin taucht im Kalender der Vertretung auf, sie kann
+   dort die Anwesenheit erfassen, und im Kalender steht „Vertretung: …".
+
+**Weitere Aktionen:** Die anfragende Trainerin kann ihre Anfrage zurückziehen,
+die übernehmende ihre Zusage („Doch nicht") — die Anfrage ist dann wieder offen.
+Der Admin kann eine Übernahme **ablehnen** (Anfrage wird wieder offen) oder die
+ganze Anfrage **schließen**, etwa wenn er die Vertretung direkt am Termin
+geregelt hat.
+
+**Sichtbarkeit im Kalender:** Termine mit laufender Anfrage sind in beiden
+Kalendern markiert — „Vertretung gesucht" bzw. „Vertretung wartet auf
+Bestätigung". Im Termin-Detailbereich steht, wer sucht, wer übernehmen möchte
+und aus welchem Grund.
+
+**Bewusst so gebaut:**
+
+- **Nur Einzeltermine.** Für längere Ausfälle (Urlaub, längere Krankheit) gibt
+  es keine Zeitraum-Anfrage — das regelt die Studioleitung direkt über
+  „Trainer:in ändern → Zeitraum".
+- **Pro Termin läuft immer nur eine Anfrage.** Erledigte Anfragen bleiben als
+  Dokumentation liegen und blockieren eine spätere neue Anfrage nicht.
+- **Kein Mailversand.** Anfragen sieht man beim nächsten Login im Bereich
+  „Vertretungen". Kurzfristige Ausfälle laufen weiterhin über WhatsApp o.ä.;
+  das System dokumentiert und bestätigt sie. Sobald der Mailversand steht
+  (siehe unten), lässt sich die Benachrichtigung ohne Umbau ergänzen.
+- Alle Schritte landen im Änderungslog — die aus dem Trainer-Bereich als
+  „Trainer:in <Name>" statt eines Admin-Kontos.
+
+## Phase I1 – Stundenlisten je Trainer:in (Update)
+
+Keine Migration, kein `npm install` — es kommen nur neue Dateien dazu.
+
+Neuer Reiter **„Stunden"** im Admin-Bereich: Zeitraum wählen (Vorgabe ist der
+laufende Monat), optional auf eine Trainer:in einschränken, „Auswerten".
+Ergebnis ist eine Tabelle mit Anzahl Termine und Stunden je Person, aufklappbar
+zu den einzelnen Terminen, plus **„Als Excel"** — die Datei hat zwei Blätter:
+eine Übersicht je Person und eine Zeile je Termin, damit jede Summe
+nachvollziehbar bleibt.
+
+**Wie gezählt wird:**
+
+- **Jeder nicht abgesagte Termin zählt**, unabhängig davon, ob die Anwesenheit
+  erfasst wurde oder wie viele Teilnehmerinnen da waren. Gearbeitet wurde in
+  jedem Fall. Abgesagte Termine zählen nicht.
+- **Übernommene Vertretungen zählen für die Person, die den Termin gehalten
+  hat** — nicht für die, die ihn abgegeben hat. Eine Vertretung auf Terminebene
+  gewinnt also vor der Trainer:in des Kurses. In der Detailliste sind solche
+  Termine mit „Vertretung" gekennzeichnet.
+- Die Dauer kommt aus dem Feld „Dauer" des Kurses. Wer sie nie angepasst hat,
+  rechnet mit den voreingestellten 70 Minuten.
+- Innerhalb einer Ebene hat ein verknüpftes **Trainer-Konto** Vorrang vor dem
+  freien Textfeld, damit die Stunden bei der Person landen, die sie abrechnet.
+
+**Drei Zeilenarten in der Tabelle:** Trainerinnen mit eigenem Konto zuerst, dann
+Gastdozent:innen, die nur als Freitext eingetragen sind („ohne Konto"), zuletzt
+Termine, bei denen niemand eingetragen ist („nicht besetzt"). Die letzte Zeile
+ist bewusst dabei — so ergibt die Summe aller Zeilen immer die tatsächliche
+Anzahl der Termine im Zeitraum, und Lücken fallen beim Abrechnen auf.
+
 ## Was als Nächstes sinnvoll wäre (bewusst noch nicht enthalten)
 
 

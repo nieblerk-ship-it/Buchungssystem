@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ChevronLeft, ChevronRight, Users, Clock, LogOut } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Users, Clock, LogOut, HandHeart } from "lucide-react";
 
 const WEEKDAY_SHORT = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 const MONTH_LABEL = [
@@ -51,6 +51,12 @@ export default function TrainerPage() {
 
   const [sessions, setSessions] = useState<any[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [view, setView] = useState<"kalender" | "vertretungen">("kalender");
+  const [requests, setRequests] = useState<any[]>([]);
+  const [myId, setMyId] = useState<string | null>(null);
+  const [askSubFor, setAskSubFor] = useState<string | null>(null);
+  const [subReason, setSubReason] = useState("");
+  const [subError, setSubError] = useState<string | null>(null);
 
   const today = useMemo(() => new Date(), []);
   const currentWeekStart = useMemo(() => getMonday(today), [today]);
@@ -71,13 +77,37 @@ export default function TrainerPage() {
     if (!res.ok) { setLoginError(data.error ?? "Fehler beim Login."); return; }
     setTrainerName(data.name);
     setLoggedIn(true);
-    await loadSessions();
+    await Promise.all([loadSessions(), loadRequests()]);
   }
 
   async function loadSessions() {
     const res = await fetch("/api/trainer/bookings");
     const data = await res.json();
     if (res.ok) setSessions(data.sessions ?? []);
+  }
+  async function loadRequests() {
+    const res = await fetch("/api/trainer/substitutes");
+    const data = await res.json();
+    if (res.ok) { setRequests(data.requests ?? []); setMyId(data.me?.id ?? null); }
+  }
+  async function askForSubstitute(sessionId: string) {
+    setSubError(null);
+    const res = await fetch("/api/trainer/substitutes", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, reason: subReason }),
+    });
+    if (!res.ok) { setSubError((await res.json()).error ?? "Fehler."); return; }
+    setAskSubFor(null); setSubReason("");
+    await loadRequests();
+  }
+  async function requestAction(id: string, action: "claim" | "unclaim" | "cancel") {
+    setSubError(null);
+    const res = await fetch("/api/trainer/substitutes", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, action }),
+    });
+    if (!res.ok) { setSubError((await res.json()).error ?? "Fehler."); return; }
+    await Promise.all([loadRequests(), loadSessions()]);
   }
   async function saveAttendance(bookingId: string, attended: boolean | null) {
     const res = await fetch("/api/trainer/bookings", {
@@ -91,6 +121,7 @@ export default function TrainerPage() {
     await fetch("/api/trainer/logout", { method: "POST" });
     setLoggedIn(false);
     setSessions([]);
+    setRequests([]);
   }
 
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -104,6 +135,18 @@ export default function TrainerPage() {
     return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
   })();
   const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
+  // Anfragen nach Termin, damit im Kalender direkt sichtbar ist, wo eine läuft
+  const requestBySession: Record<string, any> = {};
+  requests.forEach((r) => { if (["open", "claimed"].includes(r.status)) requestBySession[r.sessionId] = r; });
+  const openForOthers = requests.filter((r) => r.status === "open" && r.requestedById !== myId);
+  const myRequests = requests.filter((r) => r.requestedById === myId && ["open", "claimed"].includes(r.status));
+  const myClaims = requests.filter((r) => r.claimedById === myId && ["claimed", "confirmed"].includes(r.status));
+  const openCount = openForOthers.length;
+
+  function fmtDate(d: string) {
+    const [y, m, day] = d.split("-");
+    return `${day}.${m}.${y}`;
+  }
 
   if (!loggedIn) {
     return (
@@ -134,8 +177,23 @@ export default function TrainerPage() {
         </div>
       </div>
 
-      <p className="text-sm text-muted mb-6">Hier siehst du nur die Kurse, in denen du als Trainerin eingetragen bist.</p>
+      <div className="flex gap-2 mb-6 flex-wrap">
+        <button onClick={() => setView("kalender")}
+          className={`px-4 py-2 text-sm rounded-full ${view === "kalender" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+          Mein Kalender
+        </button>
+        <button onClick={() => setView("vertretungen")}
+          className={`px-4 py-2 text-sm rounded-full flex items-center gap-2 ${view === "vertretungen" ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+          <HandHeart size={14} /> Vertretungen
+          {openCount > 0 && (
+            <span className={`text-xs px-1.5 rounded-full ${view === "vertretungen" ? "bg-bg text-gold" : "bg-gold text-bg"}`}>{openCount}</span>
+          )}
+        </button>
+      </div>
 
+      {subError && <p className="text-sm text-wine mb-4">{subError}</p>}
+
+      {view === "kalender" && (<>
       <div className="flex items-center justify-center gap-3 mb-8">
         <button
           onClick={() => setWeekStart(getMonday(addDays(weekStart, -7)))}
@@ -209,6 +267,11 @@ export default function TrainerPage() {
                           <span className="flex items-center gap-1"><Users size={10} />{s.participants.length}/{s.capacity}</span>
                         </div>
                         {s.cancelled && <div className="text-wine mt-0.5">abgesagt</div>}
+                        {requestBySession[s.id] && (
+                          <div className="text-gold mt-0.5">
+                            {requestBySession[s.id].status === "claimed" ? "Vertretung gefunden" : "Vertretung gesucht"}
+                          </div>
+                        )}
                       </button>
                     );
                   })}
@@ -235,6 +298,62 @@ export default function TrainerPage() {
               {" · "}{confirmed.filter((p: any) => p.attended !== null && p.attended !== undefined).length}/{confirmed.length} erfasst
             </span>
           </div>
+
+          {(() => {
+            const req = requestBySession[selectedSession.id];
+            const isPast = selectedSession.date < formatDateOnly(today);
+            if (req) {
+              return (
+                <div className="mt-3 rounded-xl p-3 border border-gold/40 bg-bg text-xs">
+                  {req.status === "claimed" ? (
+                    <p className="text-gold">
+                      {req.claimedByName} hat die Vertretung übernommen — wartet noch auf die Bestätigung durch die Studioleitung.
+                    </p>
+                  ) : (
+                    <p className="text-gold">Vertretung gesucht — bisher hat sich niemand eingetragen.</p>
+                  )}
+                  {req.reason && <p className="text-muted mt-1">Grund: {req.reason}</p>}
+                  {req.requestedById === myId && (
+                    <button onClick={() => requestAction(req.id, "cancel")} className="mt-2 text-wine underline">
+                      Anfrage zurückziehen
+                    </button>
+                  )}
+                </div>
+              );
+            }
+            if (selectedSession.cancelled || isPast) return null;
+            if (askSubFor === selectedSession.id) {
+              return (
+                <div className="mt-3 rounded-xl p-3 border border-border bg-bg space-y-2">
+                  <p className="text-xs text-muted">
+                    Die Anfrage erscheint bei allen Trainerinnen unter „Vertretungen". Wer sich einträgt,
+                    übernimmt den Termin erst, sobald die Studioleitung bestätigt hat.
+                  </p>
+                  <input
+                    placeholder="Grund (optional, z.B. Arzttermin)"
+                    value={subReason}
+                    onChange={(e) => setSubReason(e.target.value)}
+                    className="w-full text-xs px-3 py-2 rounded-xl bg-surface border border-border text-ivory"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={() => askForSubstitute(selectedSession.id)}
+                      className="px-4 py-1.5 rounded-full text-xs font-medium bg-gold text-bg">
+                      Vertretung suchen
+                    </button>
+                    <button onClick={() => { setAskSubFor(null); setSubReason(""); }} className="text-xs text-muted underline">
+                      Abbrechen
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <button onClick={() => { setAskSubFor(selectedSession.id); setSubReason(""); }}
+                className="mt-3 text-xs px-3 py-1 rounded-full border border-gold text-gold">
+                Vertretung suchen
+              </button>
+            );
+          })()}
           {confirmed.length === 0 ? (
             <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
           ) : (
@@ -278,6 +397,98 @@ export default function TrainerPage() {
         </div>
         );
       })()}
+      </>)}
+
+      {view === "vertretungen" && (
+        <div className="space-y-8">
+          <section>
+            <h2 className="font-display text-xl text-ivory mb-1">Offene Vertretungen</h2>
+            <p className="text-xs text-muted mb-4">
+              Termine, für die eine Kollegin eine Vertretung sucht. Trägst du dich ein, ist der Termin
+              für dich reserviert — wirksam wird er erst, wenn die Studioleitung bestätigt.
+            </p>
+            {openForOthers.length === 0 ? (
+              <p className="text-sm text-muted">Aktuell sucht niemand eine Vertretung.</p>
+            ) : (
+              <ul className="space-y-2">
+                {openForOthers.map((r) => (
+                  <li key={r.id} className="rounded-2xl p-4 border border-border bg-surface flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <p className="text-sm text-ivory">
+                        {r.courseName}{r.level ? ` – ${r.level}` : ""}
+                        {r.room ? <span className="text-xs text-muted"> · {r.room}</span> : null}
+                      </p>
+                      <p className="text-xs text-muted mt-0.5">
+                        {fmtDate(r.date)} · {r.time?.slice(0, 5)} Uhr · gesucht von {r.requestedByName}
+                      </p>
+                      {r.reason && <p className="text-xs text-muted mt-0.5">Grund: {r.reason}</p>}
+                      {r.sessionCancelled && <p className="text-xs text-wine mt-0.5">Termin ist inzwischen abgesagt</p>}
+                    </div>
+                    <button onClick={() => requestAction(r.id, "claim")}
+                      className="px-4 py-1.5 rounded-full text-xs font-medium bg-gold text-bg">
+                      Ich übernehme
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h2 className="font-display text-xl text-ivory mb-1">Von mir übernommen</h2>
+            {myClaims.length === 0 ? (
+              <p className="text-sm text-muted">Du hast aktuell keine Vertretung übernommen.</p>
+            ) : (
+              <ul className="space-y-2">
+                {myClaims.map((r) => (
+                  <li key={r.id} className="rounded-2xl p-4 border border-border bg-surface flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <p className="text-sm text-ivory">{r.courseName}{r.level ? ` – ${r.level}` : ""}</p>
+                      <p className="text-xs text-muted mt-0.5">
+                        {fmtDate(r.date)} · {r.time?.slice(0, 5)} Uhr · für {r.requestedByName}
+                      </p>
+                      <p className={`text-xs mt-0.5 ${r.status === "confirmed" ? "text-green-400" : "text-gold"}`}>
+                        {r.status === "confirmed" ? "bestätigt — der Termin steht in deinem Kalender" : "wartet auf Bestätigung durch die Studioleitung"}
+                      </p>
+                    </div>
+                    {r.status === "claimed" && (
+                      <button onClick={() => requestAction(r.id, "unclaim")} className="text-xs text-wine underline">
+                        Doch nicht
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h2 className="font-display text-xl text-ivory mb-1">Meine Anfragen</h2>
+            {myRequests.length === 0 ? (
+              <p className="text-sm text-muted">Du suchst aktuell für keinen Termin eine Vertretung.</p>
+            ) : (
+              <ul className="space-y-2">
+                {myRequests.map((r) => (
+                  <li key={r.id} className="rounded-2xl p-4 border border-border bg-surface flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <p className="text-sm text-ivory">{r.courseName}{r.level ? ` – ${r.level}` : ""}</p>
+                      <p className="text-xs text-muted mt-0.5">{fmtDate(r.date)} · {r.time?.slice(0, 5)} Uhr</p>
+                      <p className={`text-xs mt-0.5 ${r.status === "claimed" ? "text-gold" : "text-muted"}`}>
+                        {r.status === "claimed"
+                          ? `${r.claimedByName} hat übernommen — wartet auf Bestätigung`
+                          : "noch hat sich niemand eingetragen"}
+                      </p>
+                    </div>
+                    <button onClick={() => requestAction(r.id, "cancel")} className="text-xs text-wine underline">
+                      Zurückziehen
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }

@@ -90,12 +90,17 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "log" | "einstellungen">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "vertretungen" | "stunden" | "log" | "einstellungen">("anmeldungen");
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [hiddenAlertTypes, setHiddenAlertTypes] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
   const [settingsForm, setSettingsForm] = useState<any>(null);
   const [trainers, setTrainers] = useState<any[]>([]);
+  const [subRequests, setSubRequests] = useState<any[]>([]);
+  const [hours, setHours] = useState<any>(null);
+  const [hoursFilter, setHoursFilter] = useState({ from: "", to: "", trainerId: "" });
+  const [hoursLoading, setHoursLoading] = useState(false);
+  const [expandedHours, setExpandedHours] = useState<string | null>(null);
   const [newTrainer, setNewTrainer] = useState({ name: "", email: "", newPassword: "" });
   const [resetPasswordFor, setResetPasswordFor] = useState<string | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = useState("");
@@ -182,7 +187,7 @@ export default function AdminPage() {
   const [logLoading, setLogLoading] = useState(false);
 
   async function loadAll() {
-    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes(), loadSettings()]);
+    await Promise.all([loadSessions(), loadCourses(), loadCustomers(), loadProducts(), loadTrainers(), loadCourseTypes(), loadSettings(), loadSubRequests()]);
   }
 
   useEffect(() => {
@@ -200,6 +205,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (tab === "log" && unlocked) loadLog();
+    if (tab === "stunden" && unlocked && !hours) loadHours();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -276,6 +282,42 @@ export default function AdminPage() {
     setSaving(false);
     if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
     await loadSettings();
+  }
+
+  async function loadHours() {
+    setHoursLoading(true); setActionError(null);
+    const params = new URLSearchParams();
+    if (hoursFilter.from) params.set("from", hoursFilter.from);
+    if (hoursFilter.to) params.set("to", hoursFilter.to);
+    if (hoursFilter.trainerId) params.set("trainerId", hoursFilter.trainerId);
+    const res = await fetch(`/api/admin/hours?${params.toString()}`);
+    const data = await res.json();
+    setHoursLoading(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+    setHours(data);
+    setHoursFilter((f) => ({ ...f, from: f.from || data.from, to: f.to || data.to }));
+  }
+  function exportHours() {
+    const params = new URLSearchParams();
+    if (hoursFilter.from) params.set("from", hoursFilter.from);
+    if (hoursFilter.to) params.set("to", hoursFilter.to);
+    if (hoursFilter.trainerId) params.set("trainerId", hoursFilter.trainerId);
+    window.location.href = `/api/admin/hours/export?${params.toString()}`;
+  }
+
+  async function loadSubRequests() {
+    const res = await fetch(`/api/admin/substitutes`);
+    const data = await res.json();
+    if (res.ok) setSubRequests(data.requests ?? []);
+  }
+  async function decideSubRequest(id: string, action: "confirm" | "reject" | "cancel") {
+    setActionError(null);
+    const res = await fetch("/api/admin/substitutes", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, action }),
+    });
+    if (!res.ok) { setActionError((await res.json()).error ?? "Fehler."); return; }
+    await Promise.all([loadSubRequests(), loadSessions()]);
   }
 
   async function loadCourseTypes() {
@@ -1041,12 +1083,19 @@ export default function AdminPage() {
           { id: "schueler", label: "Schüler:innen" },
           { id: "produkte", label: "Produkte" },
           { id: "trainer", label: "Trainer:innen" },
+          { id: "vertretungen", label: "Vertretungen" },
+          { id: "stunden", label: "Stunden" },
           { id: "meldungen", label: "Meldungen" },
           { id: "log", label: "Änderungslog" },
           { id: "einstellungen", label: "Einstellungen" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`px-4 py-2 text-sm rounded-full ${tab === t.id ? "bg-gold text-bg font-semibold" : "border border-border text-muted"}`}>
+            {t.id === "vertretungen" && subRequests.filter((r: any) => r.status === "claimed").length > 0 && (
+              <span className={`text-xs px-1.5 mr-1.5 rounded-full ${tab === t.id ? "bg-bg text-gold" : "bg-gold text-bg"}`}>
+                {subRequests.filter((r: any) => r.status === "claimed").length}
+              </span>
+            )}
             {t.label}
           </button>
         ))}
@@ -1066,6 +1115,8 @@ export default function AdminPage() {
           return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
         })();
         const selectedSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
+        const subBySession: Record<string, any> = {};
+        subRequests.filter((r: any) => ["open", "claimed"].includes(r.status)).forEach((r: any) => { subBySession[r.sessionId] = r; });
 
         return (
           <div>
@@ -1192,6 +1243,11 @@ export default function AdminPage() {
                               {s.hasSubstitute && <div className="text-gold mt-0.5">Vertretung: {s.effectiveTrainerName ?? "andere Trainer:in"}</div>}
                               {!s.cancelled && s.trainerRequired && !s.effectiveTrainerName && (
                                 <div className="text-yellow-400 mt-0.5">Trainer:in fehlt</div>
+                              )}
+                              {subBySession[s.id] && (
+                                <div className="text-gold mt-0.5">
+                                  {subBySession[s.id].status === "claimed" ? "Vertretung wartet auf Bestätigung" : "Vertretung gesucht"}
+                                </div>
                               )}
                             </button>
                           );
@@ -1552,6 +1608,28 @@ export default function AdminPage() {
                     <button onClick={() => setSelectedSessionId(null)} className="text-xs text-muted underline">Schließen</button>
                   </div>
                 </div>
+
+                {subBySession[selectedSession.id] && (
+                  <div className="mt-3 rounded-xl p-3 border border-gold/40 bg-bg text-xs">
+                    {subBySession[selectedSession.id].status === "claimed" ? (
+                      <p className="text-gold">
+                        {subBySession[selectedSession.id].claimedByName} möchte diesen Termin für{" "}
+                        {subBySession[selectedSession.id].requestedByName} übernehmen — noch nicht bestätigt.
+                      </p>
+                    ) : (
+                      <p className="text-gold">
+                        {subBySession[selectedSession.id].requestedByName} sucht für diesen Termin eine
+                        Vertretung. Bisher hat sich niemand eingetragen.
+                      </p>
+                    )}
+                    {subBySession[selectedSession.id].reason && (
+                      <p className="text-muted mt-1">Grund: {subBySession[selectedSession.id].reason}</p>
+                    )}
+                    <button onClick={() => setTab("vertretungen")} className="mt-2 text-gold underline">
+                      zu den Vertretungen
+                    </button>
+                  </div>
+                )}
 
                 {selectedSession.participants.length === 0 ? (
                   <p className="text-sm text-muted mt-2">Noch keine Anmeldungen.</p>
@@ -2172,6 +2250,228 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
+      {tab === "stunden" && (
+        <div className="space-y-5">
+          <div className="rounded-2xl p-5 border border-border bg-surface space-y-3">
+            <h3 className="font-display text-lg text-ivory mb-1">Stundenliste</h3>
+            <p className="text-xs text-muted mb-2">
+              Gezählt wird jeder nicht abgesagte Termin im Zeitraum — unabhängig davon, ob die
+              Anwesenheit erfasst wurde oder wie viele Teilnehmerinnen da waren. Übernommene
+              Vertretungen zählen für die Person, die den Termin tatsächlich gehalten hat.
+            </p>
+            <div className="grid sm:grid-cols-4 gap-3">
+              <Field label="Von">
+                <input type="date" value={hoursFilter.from} onChange={(e) => setHoursFilter({ ...hoursFilter, from: e.target.value })} className={`w-full ${inputClass}`} />
+              </Field>
+              <Field label="Bis (einschließlich)">
+                <input type="date" value={hoursFilter.to} onChange={(e) => setHoursFilter({ ...hoursFilter, to: e.target.value })} className={`w-full ${inputClass}`} />
+              </Field>
+              <Field label="Trainer:in">
+                <select value={hoursFilter.trainerId} onChange={(e) => setHoursFilter({ ...hoursFilter, trainerId: e.target.value })} className={`w-full ${inputClass}`}>
+                  <option value="">— alle —</option>
+                  {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </Field>
+              <div className="flex items-end gap-2">
+                <button onClick={loadHours} disabled={hoursLoading} className="px-4 py-2.5 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
+                  {hoursLoading ? "Lade…" : "Auswerten"}
+                </button>
+                <button onClick={exportHours} className="px-4 py-2.5 rounded-full text-sm border border-gold text-gold">
+                  Als Excel
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {!hours ? (
+            <p className="text-sm text-muted">Zeitraum wählen und auswerten.</p>
+          ) : hours.groups.length === 0 ? (
+            <p className="text-sm text-muted">Keine Termine in diesem Zeitraum.</p>
+          ) : (
+            <>
+              <div className="rounded-2xl border border-border bg-surface overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-muted border-b border-border">
+                    <tr>
+                      <th className="text-left px-4 py-2 font-normal">Trainer:in</th>
+                      <th className="text-right px-4 py-2 font-normal">Termine</th>
+                      <th className="text-right px-4 py-2 font-normal">Stunden</th>
+                      <th className="px-4 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hours.groups.map((g: any) => (
+                      <tr key={g.key} className="border-b border-border/50 last:border-0">
+                        <td className="px-4 py-2 text-ivory">
+                          {g.name}
+                          {g.kind === "guest" && <span className="ml-2 text-xs text-muted">ohne Konto</span>}
+                          {g.kind === "unassigned" && <span className="ml-2 text-xs text-yellow-400">nicht besetzt</span>}
+                        </td>
+                        <td className="px-4 py-2 text-right text-ivory">{g.sessionCount}</td>
+                        <td className="px-4 py-2 text-right text-ivory">{g.hours.toLocaleString("de-DE")}</td>
+                        <td className="px-4 py-2 text-right">
+                          <button onClick={() => setExpandedHours(expandedHours === g.key ? null : g.key)} className="text-xs text-gold underline">
+                            {expandedHours === g.key ? "zuklappen" : "Termine zeigen"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="border-t border-border">
+                      <td className="px-4 py-2 text-ivory font-semibold">Gesamt</td>
+                      <td className="px-4 py-2 text-right text-ivory font-semibold">{hours.totals.sessionCount}</td>
+                      <td className="px-4 py-2 text-right text-ivory font-semibold">{hours.totals.hours.toLocaleString("de-DE")}</td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {expandedHours && (() => {
+                const g = hours.groups.find((x: any) => x.key === expandedHours);
+                if (!g) return null;
+                return (
+                  <div className="rounded-2xl p-4 border border-border bg-surface">
+                    <h4 className="text-sm text-ivory font-medium mb-3">{g.name} — {g.sessionCount} Termine</h4>
+                    <ul className="space-y-1 text-xs">
+                      {g.sessions.map((s: any) => (
+                        <li key={s.sessionId} className="flex items-center gap-2 flex-wrap text-muted">
+                          <span className="text-ivory w-24">{s.date.split("-").reverse().join(".")}</span>
+                          <span className="w-12">{s.time?.slice(0, 5)}</span>
+                          <span className="text-ivory">{s.courseName}</span>
+                          {s.level && <span>· {s.level}</span>}
+                          {s.room && <span>· {s.room}</span>}
+                          <span>· {s.durationMinutes} Min.</span>
+                          {s.isSubstitute && <span className="text-gold">· Vertretung</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "vertretungen" && (() => {
+        const todayS = formatDateOnly(today);
+        const pending = subRequests.filter((r: any) => r.status === "claimed");
+        const open = subRequests.filter((r: any) => r.status === "open");
+        const done = subRequests
+          .filter((r: any) => ["confirmed", "cancelled"].includes(r.status))
+          .slice(0, 30);
+
+        function Row({ r, children }: { r: any; children?: React.ReactNode }) {
+          const past = r.date < todayS;
+          return (
+            <li className={`rounded-2xl p-4 border bg-surface flex items-start justify-between gap-3 flex-wrap ${past ? "border-border opacity-60" : "border-border"}`}>
+              <div>
+                <p className="text-sm text-ivory">
+                  {r.courseName}{r.level ? ` – ${r.level}` : ""}
+                  {r.room ? <span className="text-xs text-muted"> · {r.room}</span> : null}
+                </p>
+                <p className="text-xs text-muted mt-0.5">
+                  {r.date} · {r.time?.slice(0, 5)} Uhr · gesucht von {r.requestedByName}
+                  {past ? " · Termin liegt in der Vergangenheit" : ""}
+                </p>
+                {r.reason && <p className="text-xs text-muted mt-0.5">Grund: {r.reason}</p>}
+                {r.claimedByName && (
+                  <p className="text-xs text-gold mt-0.5">Übernahme durch {r.claimedByName}</p>
+                )}
+                {r.status === "confirmed" && (
+                  <p className="text-xs text-green-400 mt-0.5">bestätigt von {r.decidedByName}</p>
+                )}
+                {r.status === "cancelled" && (
+                  <p className="text-xs text-muted mt-0.5">zurückgezogen von {r.decidedByName}</p>
+                )}
+                {r.sessionCancelled && <p className="text-xs text-wine mt-0.5">Termin ist abgesagt</p>}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">{children}</div>
+            </li>
+          );
+        }
+
+        return (
+          <div className="space-y-8">
+            <section>
+              <h3 className="font-display text-lg text-ivory mb-1">Wartet auf deine Bestätigung ({pending.length})</h3>
+              <p className="text-xs text-muted mb-4">
+                Eine Trainerin hat sich für den Termin eingetragen. Erst mit deiner Bestätigung wird sie
+                als Vertretung eingetragen — sie sieht den Termin dann in ihrem Bereich und kann die
+                Anwesenheit erfassen.
+              </p>
+              {pending.length === 0 ? (
+                <p className="text-sm text-muted">Nichts offen.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {pending.map((r: any) => (
+                    <Row key={r.id} r={r}>
+                      <button onClick={() => decideSubRequest(r.id, "confirm")}
+                        className="px-4 py-1.5 rounded-full text-xs font-medium bg-gold text-bg">
+                        Bestätigen
+                      </button>
+                      <button onClick={() => decideSubRequest(r.id, "reject")}
+                        className="text-xs px-3 py-1 rounded-full border border-border text-muted">
+                        Ablehnen
+                      </button>
+                      <button onClick={() => decideSubRequest(r.id, "cancel")}
+                        className="text-xs text-wine underline">
+                        Anfrage schließen
+                      </button>
+                    </Row>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section>
+              <h3 className="font-display text-lg text-ivory mb-1">Vertretung noch gesucht ({open.length})</h3>
+              <p className="text-xs text-muted mb-4">
+                Hier hat sich noch niemand eingetragen. Wenn du es selbst regelst, trag die Vertretung
+                direkt am Termin ein („Trainer:in ändern") und schließe die Anfrage hier.
+              </p>
+              {open.length === 0 ? (
+                <p className="text-sm text-muted">Nichts offen.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {open.map((r: any) => (
+                    <Row key={r.id} r={r}>
+                      <button
+                        onClick={() => {
+                          const target = sessions.find((x) => x.id === r.sessionId);
+                          if (target) setWeekStart(getMonday(new Date(target.date + "T00:00:00")));
+                          setSelectedSessionId(r.sessionId);
+                          setShowInactive(true);
+                          setTab("anmeldungen");
+                        }}
+                        className="text-xs text-gold underline"
+                      >
+                        zum Termin
+                      </button>
+                      <button onClick={() => decideSubRequest(r.id, "cancel")}
+                        className="text-xs text-wine underline">
+                        Anfrage schließen
+                      </button>
+                    </Row>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section>
+              <h3 className="font-display text-lg text-ivory mb-3">Erledigt</h3>
+              {done.length === 0 ? (
+                <p className="text-sm text-muted">Noch nichts erledigt.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {done.map((r: any) => <Row key={r.id} r={r} />)}
+                </ul>
+              )}
+            </section>
+          </div>
+        );
+      })()}
 
       {tab === "meldungen" && (() => {
         const todayStr = formatDateOnly(today);
