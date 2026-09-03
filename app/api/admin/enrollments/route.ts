@@ -38,6 +38,38 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Schüler und Kurs müssen angegeben sein." }, { status: 400 });
   }
   const db = supabaseAdmin();
+
+  // Eine Person kann demselben Kurs mehrfach zugeteilt sein, solange sich die
+  // Zeiträume nicht überschneiden (z.B. Januar bis März und wieder ab Juni).
+  // Überschneiden sie sich, ist es ein Versehen: doppelte Zuteilungen führen
+  // zu doppelten Einträgen in Listen und beim Verschieben von Gruppen.
+  const newFrom = valid_from || new Date().toISOString().slice(0, 10);
+  const newUntil = valid_until || null;
+
+  const { data: existingRows } = await db
+    .from("enrollments")
+    .select("id, valid_from, valid_until")
+    .eq("customer_id", customerId)
+    .eq("course_id", courseId)
+    .eq("active", true);
+
+  const overlapping = (existingRows ?? []).find((e: any) => {
+    const existingFrom = e.valid_from ?? "0000-01-01";
+    const existingUntil = e.valid_until ?? "9999-12-31";
+    const untilForCheck = newUntil ?? "9999-12-31";
+    return existingFrom <= untilForCheck && newFrom <= existingUntil;
+  });
+
+  if (overlapping) {
+    const bis = overlapping.valid_until ? ` bis ${overlapping.valid_until}` : " ohne Enddatum";
+    return NextResponse.json(
+      {
+        error: `Diese Person ist dem Kurs bereits fest zugeteilt (ab ${overlapping.valid_from}${bis}). Die bestehende Zuteilung lässt sich im Reiter Schüler:innen ändern oder beenden.`,
+      },
+      { status: 400 }
+    );
+  }
+
   const { data, error } = await db
     .from("enrollments")
     .insert({

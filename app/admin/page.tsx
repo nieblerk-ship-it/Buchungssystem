@@ -44,6 +44,96 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** Kurs so beschriften, dass er ohne Nachdenken erkennbar ist:
+ *  „Beginner 2/3 · Mo 18:00 · Raum 1 · Lena" */
+function courseLabel(c: any) {
+  const parts = [c.name];
+  const day = c.weekday ? WEEKDAY_SHORT[c.weekday - 1] : null;
+  const time = (c.start_time ?? "").slice(0, 5);
+  if (day || time) parts.push([day, time].filter(Boolean).join(" "));
+  if (c.room) parts.push(c.room);
+  const trainer = c.instructor ?? c.trainer?.name ?? null;
+  if (trainer) parts.push(trainer);
+  return parts.join(" · ");
+}
+
+/**
+ * Auswahlliste für Personen mit Suche und Level-Filter. Ein einfaches
+ * Dropdown wird bei ein paar hundert Schülerinnen unbrauchbar.
+ */
+function PersonPicker({
+  people, value, onChange, emptyHint,
+}: {
+  people: any[];
+  value: string;
+  onChange: (id: string) => void;
+  emptyHint?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [level, setLevel] = useState("");
+
+  const levels = Array.from(new Set(people.map((p) => p.level).filter(Boolean))).sort();
+  const needle = query.trim().toLowerCase();
+  const filtered = people.filter((p) => {
+    if (level && p.level !== level) return false;
+    if (!needle) return true;
+    return (
+      (p.name ?? "").toLowerCase().includes(needle) ||
+      (p.email ?? "").toLowerCase().includes(needle)
+    );
+  });
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2 flex-wrap">
+        <input
+          className={inputClass + " flex-1 min-w-[180px]"}
+          placeholder="Name oder E-Mail suchen …"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {levels.length > 0 && (
+          <select className={inputClass} value={level} onChange={(e) => setLevel(e.target.value)}>
+            <option value="">alle Level</option>
+            {levels.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-border max-h-52 overflow-y-auto">
+        {filtered.length === 0 ? (
+          <p className="text-xs text-muted p-3">{emptyHint ?? "Niemand gefunden."}</p>
+        ) : (
+          filtered.map((p) => {
+            const id = p.customerId ?? p.id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => onChange(id)}
+                className={`w-full text-left px-3 py-2 text-sm border-b border-border last:border-0 ${
+                  value === id ? "bg-surfaceAlt text-gold" : "text-ivory hover:bg-surfaceAlt"
+                }`}
+              >
+                {p.name}
+                {(p.level || p.email) && (
+                  <span className="block text-[11px] text-muted">
+                    {[p.level, p.email].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+              </button>
+            );
+          })
+        )}
+      </div>
+      <p className="text-[11px] text-muted">
+        {filtered.length} von {people.length} angezeigt
+        {value && ` · ausgewählt: ${people.find((p) => (p.customerId ?? p.id) === value)?.name ?? ""}`}
+      </p>
+    </div>
+  );
+}
+
 function confirmedCount(s: any) {
   return (s.participants ?? []).filter((p: any) => p.status === "confirmed").length;
 }
@@ -90,7 +180,31 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "vertretungen" | "stunden" | "ablage" | "log" | "einstellungen">("anmeldungen");
+  const [tab, setTab] = useState<"anmeldungen" | "schueler" | "produkte" | "meldungen" | "trainer" | "vertretungen" | "stunden" | "ablage" | "planung" | "log" | "einstellungen">("anmeldungen");
+
+  // ---- Planung (Phase J) ----
+  // planData ist immer frisch gerechnet: echte Welt + geplante Unterschiede.
+  // Nichts davon liegt gespeichert, sonst zeigte der Plan einen alten Stand.
+  const [plans, setPlans] = useState<any[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [planData, setPlanData] = useState<any>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planWeekStart, setPlanWeekStart] = useState<Date>(() => getMonday(new Date()));
+  const [showNewPlan, setShowNewPlan] = useState(false);
+  const [newPlanForm, setNewPlanForm] = useState({ name: "", description: "" });
+  const [renamingPlan, setRenamingPlan] = useState<{ id: string; name: string; description: string } | null>(null);
+  const [planSelectedSessionId, setPlanSelectedSessionId] = useState<string | null>(null);
+  const [planEditMode, setPlanEditMode] = useState<"none" | "update" | "end" | "create">("none");
+  const [planEditForm, setPlanEditForm] = useState<any>({});
+  const [planPersonMode, setPlanPersonMode] = useState<"none" | "add" | "end" | "group">("none");
+  const [planPersonForm, setPlanPersonForm] = useState<any>({ customerId: "", effectiveFrom: "", validUntil: "" });
+  const [planGroupForm, setPlanGroupForm] = useState<any>({ toCourseId: "", toChangeId: "", effectiveFrom: "", selected: [] as string[] });
+  const [planGroupMembers, setPlanGroupMembers] = useState<any[]>([]);
+  const [planCreateForm, setPlanCreateForm] = useState<any>({
+    name: "", category: "Pole", level: "", room: ROOMS[0], startTime: "18:00",
+    weekday: 1, durationMinutes: 70, capacity: 8, trainerId: "", instructor: "",
+    isSingle: false, startDate: "", endDate: "",
+  });
   const [alertFilter, setAlertFilter] = useState<"alle" | "rot" | "gelb">("alle");
   const [hiddenAlertTypes, setHiddenAlertTypes] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
@@ -130,6 +244,8 @@ export default function AdminPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerLevelFilter, setCustomerLevelFilter] = useState("");
   const [products, setProducts] = useState<any[]>([]);
 
   const [newCourse, setNewCourse] = useState<any>(EMPTY_COURSE);
@@ -218,6 +334,7 @@ export default function AdminPage() {
     if (tab === "log" && unlocked) loadLog();
     if (tab === "stunden" && unlocked && !hours) loadHours();
     if (tab === "ablage" && unlocked && archiveLabels.length === 0) { loadArchiveLabels(); loadArchive(); }
+    if (tab === "planung" && unlocked) loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -249,7 +366,8 @@ export default function AdminPage() {
   async function loadSessions() {
     const res = await fetch(`/api/admin/bookings`);
     const data = await res.json();
-    if (res.ok) setSessions(data.sessions);
+    if (res.ok) { setSessions(data.sessions); return data.sessions as any[]; }
+    return null;
   }
   async function loadCourses() {
     const res = await fetch(`/api/admin/courses`);
@@ -427,6 +545,186 @@ export default function AdminPage() {
     window.location.href = `/api/admin/hours/export?${params.toString()}`;
   }
 
+  // ---- Planung ----
+  async function loadPlans() {
+    const res = await fetch("/api/admin/plans");
+    const data = await res.json();
+    if (res.ok) setPlans(data.plans ?? []);
+    else setActionError(data.error);
+  }
+
+  async function loadPlanCalendar(planId: string, weekStart: Date) {
+    setPlanLoading(true);
+    const from = formatDateOnly(weekStart);
+    const to = formatDateOnly(addDays(weekStart, 6));
+    const res = await fetch(`/api/admin/plans/calendar?planId=${planId}&from=${from}&to=${to}`);
+    const data = await res.json();
+    setPlanLoading(false);
+    if (res.ok) setPlanData(data);
+    else setActionError(data.error);
+  }
+
+  async function createPlan(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/plans", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newPlanForm),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error); return; }
+    setShowNewPlan(false);
+    setNewPlanForm({ name: "", description: "" });
+    await loadPlans();
+    setSelectedPlanId(data.plan.id);
+    await loadPlanCalendar(data.plan.id, planWeekStart);
+  }
+
+  async function savePlanRename(e: React.FormEvent) {
+    e.preventDefault();
+    if (!renamingPlan) return;
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/plans", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ planId: renamingPlan.id, name: renamingPlan.name, description: renamingPlan.description }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error); return; }
+    setRenamingPlan(null);
+    await loadPlans();
+    if (selectedPlanId) await loadPlanCalendar(selectedPlanId, planWeekStart);
+  }
+
+  async function removePlan(plan: any, hard: boolean) {
+    setActionError(null);
+    const res = await fetch(`/api/admin/plans?planId=${plan.id}${hard ? "&hard=1" : ""}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) { setActionError(data.error); return; }
+    if (selectedPlanId === plan.id) { setSelectedPlanId(null); setPlanData(null); }
+    await loadPlans();
+  }
+
+  function openPlan(planId: string) {
+    setSelectedPlanId(planId);
+    const start = getMonday(new Date());
+    setPlanWeekStart(start);
+    loadPlanCalendar(planId, start);
+  }
+
+  async function refreshPlan() {
+    if (!selectedPlanId) return;
+    await loadPlanCalendar(selectedPlanId, planWeekStart);
+    await loadPlans();
+  }
+
+  async function addPlanChange(body: any) {
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/plans/changes", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ planId: selectedPlanId, ...body }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error); return false; }
+    await refreshPlan();
+    return true;
+  }
+
+  async function removePlanChange(changeId: string) {
+    setActionError(null);
+    const res = await fetch(`/api/admin/plans/changes?changeId=${changeId}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) { setActionError(data.error); return; }
+    await refreshPlan();
+  }
+
+  // Nur die Felder in den payload legen, die wirklich vom Kurs abweichen. So
+  // steht in der Änderungsliste "Raum, Uhrzeit" und nicht der ganze Kurs.
+  function planUpdatePayload(session: any, form: any) {
+    const payload: Record<string, any> = {};
+    if (form.name && form.name !== session.courseName) payload.name = form.name;
+    if (form.level !== (session.courseLevel ?? "")) payload.level = form.level;
+    if (form.category && form.category !== session.courseCategory) payload.category = form.category;
+    if (form.room && form.room !== session.room) payload.room = form.room;
+    if (form.startTime && form.startTime !== (session.time ?? "").slice(0, 5)) payload.startTime = form.startTime;
+    // Wochentag nur, wenn er bewusst umgestellt wurde: eine Verschiebung
+    // erzeugt die Termine im Plan an neuen Daten neu.
+    if (form.weekdayChanged) payload.weekday = Number(form.weekday);
+    if (Number(form.durationMinutes) !== session.durationMinutes) payload.durationMinutes = Number(form.durationMinutes);
+    if (Number(form.capacity) !== session.capacity) payload.capacity = Number(form.capacity);
+    if (form.trainerId) payload.trainerId = form.trainerId;
+    if (form.instructor) payload.instructor = form.instructor;
+    if (form.endDate) payload.endDate = form.endDate;
+    return payload;
+  }
+
+  async function loadGroupMembers(courseId: string) {
+    const res = await fetch(`/api/admin/plans/group-move?courseId=${courseId}`);
+    const data = await res.json();
+    if (res.ok) setPlanGroupMembers(data.members ?? []);
+    else setActionError(data.error);
+  }
+
+  async function submitGroupMove(fromCourseId: string) {
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/plans/group-move", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        planId: selectedPlanId,
+        fromCourseId,
+        toCourseId: planGroupForm.toCourseId || undefined,
+        toChangeId: planGroupForm.toChangeId || undefined,
+        customerIds: planGroupForm.selected,
+        effectiveFrom: planGroupForm.effectiveFrom,
+      }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error); return; }
+    setPlanPersonMode("none");
+    setPlanGroupForm({ toCourseId: "", toChangeId: "", effectiveFrom: "", selected: [] });
+    await refreshPlan();
+  }
+
+  async function removePlanGroup(groupKey: string) {
+    setActionError(null);
+    const res = await fetch(`/api/admin/plans/group-move?planId=${selectedPlanId}&groupKey=${groupKey}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) { setActionError(data.error); return; }
+    await refreshPlan();
+  }
+
+  function openPlanEdit(session: any, mode: "update" | "end") {
+    setPlanEditMode(mode);
+    const isoDay = new Date(`${session.date}T00:00:00Z`).getUTCDay();
+    setPlanEditForm({
+      sessionId: session.id,
+      courseId: session.courseId,
+      effectiveFrom: session.date,
+      name: session.courseName,
+      level: session.courseLevel ?? "",
+      category: session.courseCategory ?? "Pole",
+      room: session.room ?? ROOMS[0],
+      startTime: (session.time ?? "18:00").slice(0, 5),
+      weekday: isoDay === 0 ? 7 : isoDay,
+      weekdayChanged: false,
+      durationMinutes: session.durationMinutes,
+      capacity: session.capacity,
+      trainerId: "",
+      instructor: "",
+      endDate: "",
+      note: "",
+    });
+  }
+
+  function movePlanWeek(delta: number) {
+    const next = addDays(planWeekStart, delta * 7);
+    setPlanWeekStart(next);
+    if (selectedPlanId) loadPlanCalendar(selectedPlanId, next);
+  }
+
   async function loadSubRequests() {
     const res = await fetch(`/api/admin/substitutes`);
     const data = await res.json();
@@ -544,6 +842,12 @@ export default function AdminPage() {
   }
 
   // ---- Teilnehmer verwalten (Roster-Editor) ----
+
+  // Feste Zuteilung direkt aus dem Kalender heraus: statt nur diesen einen
+  // Termin zu buchen, wird die Person in die ganze Kursreihe eingetragen.
+  const [rosterEnrollMode, setRosterEnrollMode] = useState(false);
+  const [rosterEnrollFrom, setRosterEnrollFrom] = useState("");
+  const [rosterEnrollUntil, setRosterEnrollUntil] = useState("");
   function openRosterEditor(session: any) {
     setRosterEditingFor(session.id);
     setRosterEntries(
@@ -575,6 +879,50 @@ export default function AdminPage() {
     }]);
     setRosterNewName(""); setRosterNewEmail(""); setRosterSearch("");
   }
+  /**
+   * Trägt eine Person fest in die ganze Kursreihe ein, statt nur in diesen
+   * einen Termin. Nutzt denselben Endpunkt wie der Reiter Schüler:innen, damit
+   * es genau eine Stelle gibt, an der feste Zuteilungen entstehen.
+   */
+  async function assignFixedFromCalendar(customerId: string, session: any) {
+    // Die Termine im Reiter Anmeldungen kommen aus /api/admin/bookings und
+    // heißen dort courseId und date — nicht wie die Datenbankspalten.
+    const courseId = session.courseId;
+    if (!courseId) { setActionError("Zu diesem Termin fehlt der Kurs."); return; }
+    setSaving(true); setActionError(null);
+    const res = await fetch("/api/admin/enrollments", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customerId,
+        courseId,
+        valid_from: rosterEnrollFrom || session.date,
+        valid_until: rosterEnrollUntil || null,
+      }),
+    });
+    const data = await res.json();
+    setSaving(false);
+    if (!res.ok) { setActionError(data.error ?? "Fehler."); return; }
+
+    // Die Liste im Editor ist eine Momentaufnahme vom Öffnen. Ohne dieses
+    // Nachziehen müsste die Seite neu geladen werden, um die Person zu sehen.
+    const fresh = await loadSessions();
+    const updated = fresh?.find((s: any) => s.id === session.id);
+    if (updated) {
+      setRosterEntries(
+        updated.participants.map((p: any) => ({
+          key: p.bookingId,
+          bookingId: p.bookingId,
+          name: p.name,
+          email: p.email,
+          targetStatus: p.status,
+        }))
+      );
+    }
+    // Modus und Daten bleiben stehen, damit sich mehrere Personen
+    // nacheinander zuteilen lassen, ohne alles neu einzustellen.
+    setRosterSearch("");
+  }
+
   function submitRoster(session: any) {
     const confirmedTarget = rosterEntries.filter((e) => e.targetStatus === "confirmed").length;
     if (confirmedTarget > session.capacity) {
@@ -1208,6 +1556,7 @@ export default function AdminPage() {
           { id: "vertretungen", label: "Vertretungen" },
           { id: "stunden", label: "Stunden" },
           { id: "ablage", label: "Ablage" },
+          { id: "planung", label: "Planung" },
           { id: "meldungen", label: "Meldungen" },
           { id: "log", label: "Änderungslog" },
           { id: "einstellungen", label: "Einstellungen" },
@@ -1850,7 +2199,43 @@ export default function AdminPage() {
                       ))}
                     </ul>
                     <div className="pt-2 border-t border-border space-y-2">
-                      <p className="text-xs text-muted">Person hinzufügen:</p>
+                      <div className="rounded-lg border border-border p-3 space-y-2">
+                        <label className="flex items-center gap-2 text-xs text-ivory">
+                          <input
+                            type="checkbox"
+                            checked={rosterEnrollMode}
+                            onChange={(e) => {
+                              setRosterEnrollMode(e.target.checked);
+                              if (e.target.checked && !rosterEnrollFrom) setRosterEnrollFrom(selectedSession.date);
+                            }}
+                          />
+                          Fest zuteilen statt nur diesen Termin buchen
+                        </label>
+                        {rosterEnrollMode && (
+                          <>
+                            <p className="text-[11px] text-muted">
+                              Die Person wird für alle passenden künftigen Termine dieser Kursreihe eingetragen,
+                              auch für später erzeugte. Vergangene Termine bleiben unangetastet. Ist der Kurs voll,
+                              landet sie regulär auf der Warteliste.
+                            </p>
+                            <div className="flex gap-2 flex-wrap items-end">
+                              <div>
+                                <p className="text-[11px] text-muted mb-1">Ab</p>
+                                <input type="date" value={rosterEnrollFrom} onChange={(e) => setRosterEnrollFrom(e.target.value)}
+                                  className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs" />
+                              </div>
+                              <div>
+                                <p className="text-[11px] text-muted mb-1">Bis (optional)</p>
+                                <input type="date" value={rosterEnrollUntil} onChange={(e) => setRosterEnrollUntil(e.target.value)}
+                                  className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs" />
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted">
+                        {rosterEnrollMode ? "Person fest zuteilen:" : "Person hinzufügen:"}
+                      </p>
                       <div className="relative">
                         <input
                           placeholder="Schüler:in suchen (Name oder E-Mail)…"
@@ -1865,12 +2250,15 @@ export default function AdminPage() {
                                 c.name.toLowerCase().includes(rosterSearch.trim().toLowerCase()) ||
                                 c.email.toLowerCase().includes(rosterSearch.trim().toLowerCase())
                               )
-                              .filter((c) => !rosterEntries.some((e) => e.email === c.email))
+                              .filter((c) => rosterEnrollMode || !rosterEntries.some((e) => e.email === c.email))
                               .slice(0, 8)
                               .map((c) => (
                                 <button
                                   key={c.id}
-                                  onClick={() => { addExistingToRoster(c.id); setRosterSearch(""); }}
+                                  onClick={() => {
+                                    if (rosterEnrollMode) assignFixedFromCalendar(c.id, selectedSession);
+                                    else { addExistingToRoster(c.id); setRosterSearch(""); }
+                                  }}
                                   className="block w-full text-left px-3 py-2 text-xs text-ivory hover:bg-bg"
                                 >
                                   {c.name} <span className="text-muted">— {c.email}</span>
@@ -1885,12 +2273,14 @@ export default function AdminPage() {
                           </div>
                         )}
                       </div>
-                      <div className="flex gap-2 flex-wrap items-center">
-                        <span className="text-xs text-muted">Neue Person (noch nicht im System):</span>
-                        <input placeholder="Name" value={rosterNewName} onChange={(e) => setRosterNewName(e.target.value)} className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs w-32" />
-                        <input placeholder="E-Mail" value={rosterNewEmail} onChange={(e) => setRosterNewEmail(e.target.value)} className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs w-40" />
-                        <button onClick={addNewToRoster} className="px-3 py-1.5 rounded-full text-xs border border-border text-gold">Hinzufügen</button>
-                      </div>
+                      {!rosterEnrollMode && (
+                        <div className="flex gap-2 flex-wrap items-center">
+                          <span className="text-xs text-muted">Neue Person (noch nicht im System):</span>
+                          <input placeholder="Name" value={rosterNewName} onChange={(e) => setRosterNewName(e.target.value)} className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs w-32" />
+                          <input placeholder="E-Mail" value={rosterNewEmail} onChange={(e) => setRosterNewEmail(e.target.value)} className="px-2 py-1.5 rounded-lg bg-surface border border-border text-ivory text-xs w-40" />
+                          <button onClick={addNewToRoster} className="px-3 py-1.5 rounded-full text-xs border border-border text-gold">Hinzufügen</button>
+                        </div>
+                      )}
                     </div>
                     <div className="flex gap-2 pt-2">
                       <button onClick={() => submitRoster(selectedSession)} disabled={saving} className="px-4 py-2 rounded-full text-sm font-medium bg-gold text-bg disabled:opacity-60">
@@ -1941,7 +2331,61 @@ export default function AdminPage() {
                 Bucht eine archivierte Person selbst wieder einen Kurs, wird sie automatisch wiederhergestellt.
               </p>
             )}
-            {customers.map((c) => (
+
+            <div className="flex gap-2 flex-wrap items-center">
+              <input
+                value={customerQuery}
+                onChange={(e) => setCustomerQuery(e.target.value)}
+                placeholder="Name, E-Mail oder Telefon suchen …"
+                className={`flex-1 min-w-[220px] ${inputClass}`}
+              />
+              {Array.from(new Set(customers.map((c: any) => c.level).filter(Boolean))).length > 0 && (
+                <select value={customerLevelFilter} onChange={(e) => setCustomerLevelFilter(e.target.value)} className={inputClass}>
+                  <option value="">alle Level</option>
+                  {Array.from(new Set(customers.map((c: any) => c.level).filter(Boolean))).sort().map((l: any) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+              )}
+              {(customerQuery || customerLevelFilter) && (
+                <button onClick={() => { setCustomerQuery(""); setCustomerLevelFilter(""); }} className="text-xs text-muted underline">
+                  zurücksetzen
+                </button>
+              )}
+            </div>
+
+            {(() => {
+              const needle = customerQuery.trim().toLowerCase();
+              const visible = customers.filter((c: any) => {
+                if (customerLevelFilter && c.level !== customerLevelFilter) return false;
+                if (!needle) return true;
+                return (
+                  (c.name ?? "").toLowerCase().includes(needle) ||
+                  (c.email ?? "").toLowerCase().includes(needle) ||
+                  (c.phone ?? "").toLowerCase().includes(needle)
+                );
+              });
+              return (
+                <p className="text-xs text-muted">
+                  {visible.length === customers.length
+                    ? `${customers.length} ${customers.length === 1 ? "Person" : "Personen"}`
+                    : `${visible.length} von ${customers.length} angezeigt`}
+                </p>
+              );
+            })()}
+
+            {customers
+              .filter((c: any) => {
+                if (customerLevelFilter && c.level !== customerLevelFilter) return false;
+                const needle = customerQuery.trim().toLowerCase();
+                if (!needle) return true;
+                return (
+                  (c.name ?? "").toLowerCase().includes(needle) ||
+                  (c.email ?? "").toLowerCase().includes(needle) ||
+                  (c.phone ?? "").toLowerCase().includes(needle)
+                );
+              })
+              .map((c) => (
               <div key={c.id} className="rounded-2xl p-5 border border-border bg-surface">
                 {editingCustomerId === c.id ? (
                   <div className="space-y-3">
@@ -3120,6 +3564,723 @@ export default function AdminPage() {
             Dieser Log ist unveränderlich — es gibt keine Möglichkeit, Einträge über die App zu bearbeiten oder zu löschen.
             Angezeigt werden maximal die letzten 1000 Einträge (Export bis 5000).
           </p>
+        </div>
+      )}
+
+      {tab === "planung" && (
+        <div className="space-y-6">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 className="font-display text-2xl text-ivory">Planung</h2>
+              <p className="text-sm text-muted mt-1 max-w-2xl">
+                Ein Plan sammelt geplante Änderungen, ohne den echten Kalender zu berühren. Erst beim
+                Veröffentlichen wird daraus Wirklichkeit. Die echte Welt hat dabei immer Vorrang: Wird ein
+                Kurs zwischenzeitlich beendet, endet er auch im Plan, und die zugehörige Planung wird als
+                gegenstandslos angezeigt.
+              </p>
+            </div>
+            <button onClick={() => setShowNewPlan((v) => !v)} className="px-4 py-2 rounded-full text-sm bg-gold text-bg font-semibold whitespace-nowrap">
+              {showNewPlan ? "Abbrechen" : "+ Neuer Plan"}
+            </button>
+          </div>
+
+          {showNewPlan && (
+            <form onSubmit={createPlan} className="rounded-2xl p-5 bg-surface border border-border space-y-4">
+              <div className="grid md:grid-cols-2 gap-4">
+                <Field label="Name des Plans">
+                  <input className={inputClass + " w-full"} value={newPlanForm.name} required
+                    placeholder="z.B. Kursplan ab Mai"
+                    onChange={(e) => setNewPlanForm({ ...newPlanForm, name: e.target.value })} />
+                </Field>
+                <Field label="Beschreibung (optional)">
+                  <input className={inputClass + " w-full"} value={newPlanForm.description}
+                    placeholder="Wofür ist dieser Entwurf gedacht?"
+                    onChange={(e) => setNewPlanForm({ ...newPlanForm, description: e.target.value })} />
+                </Field>
+              </div>
+              <button type="submit" disabled={saving} className="px-5 py-2 rounded-full text-sm bg-gold text-bg font-semibold disabled:opacity-50">
+                {saving ? "Wird angelegt …" : "Plan anlegen"}
+              </button>
+            </form>
+          )}
+
+          {plans.length === 0 ? (
+            <p className="text-sm text-muted">Noch keine Pläne angelegt.</p>
+          ) : (
+            <div className="grid gap-3">
+              {plans.map((p: any) => (
+                <div key={p.id} className={`rounded-2xl p-4 border ${selectedPlanId === p.id ? "border-gold bg-surfaceAlt" : "border-border bg-surface"}`}>
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-ivory font-medium">{p.name}</span>
+                        {p.status === "draft" && <span className="text-[11px] px-2 py-0.5 rounded-full border border-border text-muted">Entwurf</span>}
+                        {p.status === "published" && <span className="text-[11px] px-2 py-0.5 rounded-full bg-gold text-bg">veröffentlicht</span>}
+                        {p.status === "discarded" && <span className="text-[11px] px-2 py-0.5 rounded-full border border-border text-muted">verworfen</span>}
+                        {p.staleCount > 0 && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-wine text-ivory flex items-center gap-1">
+                            <AlertTriangle size={11} /> {p.staleCount} gegenstandslos
+                          </span>
+                        )}
+                      </div>
+                      {p.description && <p className="text-xs text-muted mt-1">{p.description}</p>}
+                      <p className="text-[11px] text-muted mt-1">
+                        {p.changeCount} {p.changeCount === 1 ? "Änderung" : "Änderungen"} · angelegt von {p.createdByName ?? "unbekannt"} am{" "}
+                        {new Date(p.createdAt).toLocaleDateString("de-DE")}
+                        {p.publishedAt && ` · veröffentlicht am ${new Date(p.publishedAt).toLocaleDateString("de-DE")}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button onClick={() => openPlan(p.id)} className="px-3 py-1.5 rounded-full text-xs border border-border text-ivory">
+                        {selectedPlanId === p.id ? "Erneut laden" : "Öffnen"}
+                      </button>
+                      {p.status === "draft" && (
+                        <>
+                          <button onClick={() => setRenamingPlan({ id: p.id, name: p.name, description: p.description ?? "" })}
+                            className="px-3 py-1.5 rounded-full text-xs border border-border text-muted">Bearbeiten</button>
+                          <button
+                            onClick={() => askConfirm(
+                              "Plan verwerfen?",
+                              `„${p.name}" wird als verworfen markiert und bleibt zur Dokumentation stehen. Die geplanten Änderungen werden nicht veröffentlicht. Am echten Kalender ändert sich nichts.`,
+                              "Verwerfen",
+                              () => removePlan(p, false)
+                            )}
+                            className="px-3 py-1.5 rounded-full text-xs border border-border text-muted">Verwerfen</button>
+                          <button
+                            onClick={() => askConfirm(
+                              "Plan endgültig löschen?",
+                              `„${p.name}" wird mit allen geplanten Änderungen gelöscht und taucht nirgends mehr auf. Da ein Plan den echten Kalender nie berührt hat, geht nichts Dokumentiertes verloren.`,
+                              "Endgültig löschen",
+                              () => removePlan(p, true),
+                              true
+                            )}
+                            className="px-3 py-1.5 rounded-full text-xs border border-wine text-wine">Löschen</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {renamingPlan && (
+            <form onSubmit={savePlanRename} className="rounded-2xl p-5 bg-surface border border-gold space-y-4">
+              <h3 className="font-display text-lg text-ivory">Plan bearbeiten</h3>
+              <div className="grid md:grid-cols-2 gap-4">
+                <Field label="Name">
+                  <input className={inputClass + " w-full"} value={renamingPlan.name} required
+                    onChange={(e) => setRenamingPlan({ ...renamingPlan, name: e.target.value })} />
+                </Field>
+                <Field label="Beschreibung">
+                  <input className={inputClass + " w-full"} value={renamingPlan.description}
+                    onChange={(e) => setRenamingPlan({ ...renamingPlan, description: e.target.value })} />
+                </Field>
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" disabled={saving} className="px-5 py-2 rounded-full text-sm bg-gold text-bg font-semibold disabled:opacity-50">Speichern</button>
+                <button type="button" onClick={() => setRenamingPlan(null)} className="px-5 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+              </div>
+            </form>
+          )}
+
+          {selectedPlanId && planData && (() => {
+            const days = Array.from({ length: 7 }, (_, i) => addDays(planWeekStart, i));
+            const byDate: Record<string, any[]> = {};
+            (planData.sessions ?? []).forEach((s: any) => { (byDate[s.date] ??= []).push(s); });
+            const staleChanges = (planData.changes ?? []).filter((c: any) => c.stale);
+            const liveChanges = (planData.changes ?? []).filter((c: any) => !c.stale);
+
+            return (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <h3 className="font-display text-xl text-ivory">{planData.plan.name}</h3>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => movePlanWeek(-1)} className="p-2 rounded-full border border-border text-muted"><ChevronLeft size={16} /></button>
+                    <span className="text-sm text-ivory whitespace-nowrap">
+                      KW {getISOWeek(planWeekStart)} · {planWeekStart.toLocaleDateString("de-DE")}
+                    </span>
+                    <button onClick={() => movePlanWeek(1)} className="p-2 rounded-full border border-border text-muted"><ChevronRight size={16} /></button>
+                    {planData.plan.status === "draft" && (
+                      <button
+                        onClick={() => {
+                          setPlanEditMode(planEditMode === "create" ? "none" : "create");
+                          setPlanSelectedSessionId(null);
+                          setPlanCreateForm({
+                            ...planCreateForm,
+                            startDate: formatDateOnly(planWeekStart > new Date() ? planWeekStart : new Date()),
+                          });
+                        }}
+                        className="px-3 py-1.5 rounded-full text-sm bg-gold text-bg font-semibold">+</button>
+                    )}
+                  </div>
+                </div>
+
+                {(planData.conflicts ?? []).length > 0 && (
+                  <div className="rounded-2xl p-4 bg-surface border border-wine">
+                    <p className="text-sm text-wine flex items-center gap-2 mb-2">
+                      <AlertTriangle size={14} /> Raum doppelt belegt
+                    </p>
+                    <ul className="space-y-1">
+                      {(planData.conflicts ?? []).map((c: any, i: number) => (
+                        <li key={i} className="text-xs text-muted">
+                          {new Date(`${c.date}T00:00:00`).toLocaleDateString("de-DE")} · {c.room}:{" "}
+                          <span className="text-ivory">{c.a.courseName} ({(c.a.time ?? "").slice(0, 5)})</span> und{" "}
+                          <span className="text-ivory">{c.b.courseName} ({(c.b.time ?? "").slice(0, 5)})</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-[11px] text-muted mt-2">
+                      Gerechnet auf der zusammengerechneten Ansicht, also inklusive der geplanten Änderungen.
+                      Das Veröffentlichen wird dadurch nicht blockiert.
+                    </p>
+                  </div>
+                )}
+
+                {planLoading && <p className="text-sm text-muted">Wird gerechnet …</p>}
+
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
+                  {days.map((day, i) => {
+                    const key = formatDateOnly(day);
+                    const list = (byDate[key] ?? []).slice().sort((a, b) => (a.time ?? "").localeCompare(b.time ?? ""));
+                    return (
+                      <div key={key} className="rounded-xl border border-border bg-surface p-2 min-h-[120px]">
+                        <p className="text-[11px] text-muted mb-2">{WEEKDAY_SHORT[i]} {day.getDate()}.{day.getMonth() + 1}.</p>
+                        {list.length === 0 && <p className="text-[11px] text-muted opacity-50">–</p>}
+                        {list.map((s: any) => (
+                          <div key={s.id}
+                            onClick={() => { setPlanSelectedSessionId(s.id); setPlanEditMode("none"); }}
+                            className={`mb-1.5 rounded-lg p-2 border text-[11px] cursor-pointer ${
+                              planSelectedSessionId === s.id ? "ring-1 ring-gold " : ""
+                            }${
+                              s.planState === "new" ? "border-gold bg-surfaceAlt"
+                              : s.planState === "changed" ? "border-gold/50 bg-surfaceAlt"
+                              : "border-border"
+                            } ${s.cancelled ? "opacity-40 line-through" : ""}`}>
+                            {s.planState === "new" && <span className="inline-block mb-1 px-1.5 rounded-full bg-gold text-bg text-[10px]">neu</span>}
+                            {s.planState === "changed" && <span className="inline-block mb-1 px-1.5 rounded-full border border-gold text-gold text-[10px]">geändert</span>}
+                            <p className="text-ivory leading-tight">{s.courseName}</p>
+                            <p className="text-muted">{(s.time ?? "").slice(0, 5)} · {s.room ?? "kein Raum"}</p>
+                            {s.trainerName && <p className="text-muted">{s.trainerName}</p>}
+                            <p className="text-muted">
+                              {s.participants.filter((p: any) => p.status === "confirmed" && !p.removedByPlan).length}/{s.capacity}
+                              {s.participants.some((p: any) => p.origin === "planned") && <span className="text-gold"> · geplant</span>}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {(planData.warnings ?? []).length > 0 && (
+                  <div className="rounded-2xl p-4 bg-surface border border-wine">
+                    <p className="text-sm text-wine flex items-center gap-2 mb-2">
+                      <AlertTriangle size={14} /> Hinweise zur Teilnehmerplanung
+                    </p>
+                    <ul className="space-y-1">
+                      {(planData.warnings ?? []).map((w: any, i: number) => (
+                        <li key={i} className="text-xs text-muted">{w.message}</li>
+                      ))}
+                    </ul>
+                    <p className="text-[11px] text-muted mt-2">
+                      Überbuchung ist erlaubt und wird nur markiert — genau wie im echten Kalender.
+                    </p>
+                  </div>
+                )}
+
+                {planEditMode === "create" && (
+                  <div className="rounded-2xl p-5 bg-surface border border-gold space-y-4">
+                    <h4 className="font-display text-lg text-ivory">Neuen Kurs im Plan anlegen</h4>
+                    <p className="text-xs text-muted">
+                      Der Kurs entsteht erst beim Veröffentlichen. Bis dahin sieht ihn niemand außer dir —
+                      auf der Buchungsseite taucht er nicht auf.
+                    </p>
+                    <div className="grid md:grid-cols-3 gap-4">
+                      <Field label="Bezeichnung">
+                        <input className={inputClass + " w-full"} value={planCreateForm.name} list="plan-course-types"
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, name: e.target.value })} />
+                        <datalist id="plan-course-types">
+                          {courseTypes.filter((t: any) => t.active).map((t: any) => <option key={t.id} value={t.name} />)}
+                        </datalist>
+                      </Field>
+                      <Field label="Kategorie">
+                        <select className={inputClass + " w-full"} value={planCreateForm.category}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, category: e.target.value })}>
+                          {COURSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Level">
+                        <input className={inputClass + " w-full"} value={planCreateForm.level}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, level: e.target.value })} />
+                      </Field>
+                      <Field label="Raum">
+                        <select className={inputClass + " w-full"} value={planCreateForm.room}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, room: e.target.value })}>
+                          {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Trainer:in">
+                        <select className={inputClass + " w-full"} value={planCreateForm.trainerId}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, trainerId: e.target.value })}>
+                          <option value="">— keine —</option>
+                          {trainers.filter((t: any) => t.active).map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Trainer:in als Freitext (Gastdozentin)">
+                        <input className={inputClass + " w-full"} value={planCreateForm.instructor}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, instructor: e.target.value })} />
+                      </Field>
+                      <Field label="Uhrzeit">
+                        <input type="time" className={inputClass + " w-full"} value={planCreateForm.startTime}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, startTime: e.target.value })} />
+                      </Field>
+                      <Field label="Dauer (Minuten)">
+                        <input type="number" className={inputClass + " w-full"} value={planCreateForm.durationMinutes}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, durationMinutes: Number(e.target.value) })} />
+                      </Field>
+                      <Field label="Kapazität">
+                        <input type="number" className={inputClass + " w-full"} value={planCreateForm.capacity}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, capacity: Number(e.target.value) })} />
+                      </Field>
+                    </div>
+
+                    <label className="flex items-center gap-2 text-sm text-muted">
+                      <input type="checkbox" checked={planCreateForm.isSingle}
+                        onChange={(e) => setPlanCreateForm({ ...planCreateForm, isSingle: e.target.checked })} />
+                      Einzeltermin (statt regelmäßig)
+                    </label>
+
+                    <div className="grid md:grid-cols-3 gap-4">
+                      {!planCreateForm.isSingle && (
+                        <Field label="Wochentag">
+                          <select className={inputClass + " w-full"} value={planCreateForm.weekday}
+                            onChange={(e) => setPlanCreateForm({ ...planCreateForm, weekday: Number(e.target.value) })}>
+                            {WEEKDAYS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                          </select>
+                        </Field>
+                      )}
+                      <Field label={planCreateForm.isSingle ? "Datum" : "Startdatum"}>
+                        <input type="date" className={inputClass + " w-full"} value={planCreateForm.startDate}
+                          onChange={(e) => setPlanCreateForm({ ...planCreateForm, startDate: e.target.value })} />
+                      </Field>
+                      {!planCreateForm.isSingle && (
+                        <Field label="Enddatum (optional)">
+                          <input type="date" className={inputClass + " w-full"} value={planCreateForm.endDate}
+                            onChange={(e) => setPlanCreateForm({ ...planCreateForm, endDate: e.target.value })} />
+                        </Field>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button disabled={saving}
+                        onClick={async () => {
+                          const ok = await addPlanChange({ kind: "course_create", effectiveFrom: planCreateForm.startDate, payload: planCreateForm });
+                          if (ok) setPlanEditMode("none");
+                        }}
+                        className="px-5 py-2 rounded-full text-sm bg-gold text-bg font-semibold disabled:opacity-50">
+                        {saving ? "Wird gespeichert …" : "In den Plan aufnehmen"}
+                      </button>
+                      <button onClick={() => setPlanEditMode("none")} className="px-5 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                    </div>
+                  </div>
+                )}
+
+                {planSelectedSessionId && (() => {
+                  const s = (planData.sessions ?? []).find((x: any) => x.id === planSelectedSessionId);
+                  if (!s) return null;
+                  const isPlanned = s.courseId === null;
+                  return (
+                    <div className="rounded-2xl p-5 bg-surface border border-gold space-y-4">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div>
+                          <h4 className="font-display text-lg text-ivory">{s.courseName}</h4>
+                          <p className="text-xs text-muted">
+                            {new Date(`${s.date}T00:00:00`).toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" })}
+                            {" · "}{(s.time ?? "").slice(0, 5)} · {s.room ?? "kein Raum"} · {s.durationMinutes} Min
+                            {s.trainerName ? ` · ${s.trainerName}` : ""}
+                          </p>
+                        </div>
+                        <button onClick={() => { setPlanSelectedSessionId(null); setPlanEditMode("none"); }}
+                          className="text-xs text-muted">Schließen</button>
+                      </div>
+
+                      <div className="rounded-xl border border-border p-3">
+                        <p className="text-xs text-muted mb-2">
+                          Teilnehmerinnen ({s.participants.filter((p: any) => p.status === "confirmed" && !p.removedByPlan).length}/{s.capacity})
+                        </p>
+                        {s.participants.length === 0 ? (
+                          <p className="text-xs text-muted opacity-60">Noch niemand eingetragen.</p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {s.participants.map((p: any, i: number) => (
+                              <li key={i} className={`text-sm flex items-center gap-2 ${p.removedByPlan ? "text-muted line-through" : "text-ivory"}`}>
+                                <span>{p.name}</span>
+                                {p.origin === "planned" && <span className="text-[10px] px-1.5 rounded-full bg-gold text-bg">geplant</span>}
+                                {p.removedByPlan && <span className="text-[10px] px-1.5 rounded-full border border-wine text-wine">fällt weg</span>}
+                                {p.status === "waitlisted" && <span className="text-[10px] px-1.5 rounded-full border border-border text-muted">Warteliste</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+
+                      {!isPlanned && planData.plan.status === "draft" && planEditMode === "none" && (
+                        <div className="flex gap-2 flex-wrap">
+                          <button onClick={() => { setPlanPersonMode("add"); setPlanPersonForm({ customerId: "", effectiveFrom: s.date, validUntil: "" }); }}
+                            className="px-4 py-2 rounded-full text-sm border border-border text-ivory">Person fest zuteilen</button>
+                          <button onClick={() => { setPlanPersonMode("end"); setPlanPersonForm({ customerId: "", effectiveFrom: s.date, validUntil: "" }); loadGroupMembers(s.courseId); }}
+                            className="px-4 py-2 rounded-full text-sm border border-border text-muted">Zuteilung beenden</button>
+                          <button onClick={() => { setPlanPersonMode("group"); setPlanGroupForm({ toCourseId: "", toChangeId: "", effectiveFrom: s.date, selected: [] }); loadGroupMembers(s.courseId); }}
+                            className="px-4 py-2 rounded-full text-sm border border-gold text-gold">Gruppe verschieben</button>
+                        </div>
+                      )}
+
+                      {planPersonMode === "add" && !isPlanned && (
+                        <div className="rounded-xl border border-gold p-4 space-y-3">
+                          <p className="text-sm text-ivory">Person ab Stichtag fest zuteilen</p>
+                          <Field label="Schülerin">
+                            <PersonPicker
+                              people={customers.filter((c: any) => !c.archived_at)}
+                              value={planPersonForm.customerId}
+                              onChange={(id) => setPlanPersonForm({ ...planPersonForm, customerId: id })}
+                            />
+                          </Field>
+                          <div className="grid md:grid-cols-2 gap-4">
+                            <Field label="Ab">
+                              <input type="date" className={inputClass + " w-full"} value={planPersonForm.effectiveFrom}
+                                onChange={(e) => setPlanPersonForm({ ...planPersonForm, effectiveFrom: e.target.value })} />
+                            </Field>
+                            <Field label="Bis (optional)">
+                              <input type="date" className={inputClass + " w-full"} value={planPersonForm.validUntil}
+                                onChange={(e) => setPlanPersonForm({ ...planPersonForm, validUntil: e.target.value })} />
+                            </Field>
+                          </div>
+                          <div className="flex gap-2">
+                            <button disabled={saving || !planPersonForm.customerId}
+                              onClick={async () => {
+                                const ok = await addPlanChange({
+                                  kind: "enrollment_add", courseId: s.courseId,
+                                  customerId: planPersonForm.customerId,
+                                  effectiveFrom: planPersonForm.effectiveFrom,
+                                  validUntil: planPersonForm.validUntil || undefined,
+                                });
+                                if (ok) setPlanPersonMode("none");
+                              }}
+                              className="px-5 py-2 rounded-full text-sm bg-gold text-bg font-semibold disabled:opacity-50">In den Plan aufnehmen</button>
+                            <button onClick={() => setPlanPersonMode("none")} className="px-5 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {planPersonMode === "end" && !isPlanned && (
+                        <div className="rounded-xl border border-border p-4 space-y-3">
+                          <p className="text-sm text-ivory">Feste Zuteilung ab Stichtag beenden</p>
+                          <p className="text-xs text-muted">
+                            Termine vor dem Stichtag bleiben unverändert. Einzelbuchungen der Person werden dadurch
+                            nicht angefasst, nur ihre feste Zuteilung.
+                          </p>
+                          <Field label="Schülerin (fest zugeteilt in diesem Kurs)">
+                            <PersonPicker
+                              people={planGroupMembers}
+                              value={planPersonForm.customerId}
+                              onChange={(id) => setPlanPersonForm({ ...planPersonForm, customerId: id })}
+                              emptyHint="Diesem Kurs ist derzeit niemand fest zugeteilt."
+                            />
+                          </Field>
+                          <Field label="Ab">
+                            <input type="date" className={inputClass} value={planPersonForm.effectiveFrom}
+                              onChange={(e) => setPlanPersonForm({ ...planPersonForm, effectiveFrom: e.target.value })} />
+                          </Field>
+                          <div className="flex gap-2">
+                            <button disabled={saving || !planPersonForm.customerId}
+                              onClick={async () => {
+                                const ok = await addPlanChange({
+                                  kind: "enrollment_end", courseId: s.courseId,
+                                  customerId: planPersonForm.customerId,
+                                  effectiveFrom: planPersonForm.effectiveFrom,
+                                });
+                                if (ok) setPlanPersonMode("none");
+                              }}
+                              className="px-5 py-2 rounded-full text-sm bg-gold text-bg font-semibold disabled:opacity-50">In den Plan aufnehmen</button>
+                            <button onClick={() => setPlanPersonMode("none")} className="px-5 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {planPersonMode === "group" && !isPlanned && (
+                        <div className="rounded-xl border border-gold p-4 space-y-3">
+                          <p className="text-sm text-ivory">Gruppe verschieben</p>
+                          <p className="text-xs text-muted">
+                            Die alte Zuteilung endet zum Stichtag, die neue beginnt dort. In der Änderungsliste
+                            steht das als eine Zeile, auch wenn technisch zwei Schritte pro Person entstehen.
+                          </p>
+
+                          {planGroupMembers.length === 0 ? (
+                            <p className="text-sm text-muted">Diesem Kurs ist derzeit niemand fest zugeteilt.</p>
+                          ) : (
+                            <div className="rounded-lg border border-border p-3 max-h-52 overflow-y-auto">
+                              <input
+                                className={inputClass + " w-full mb-2"}
+                                placeholder="Name suchen …"
+                                value={planGroupForm.query ?? ""}
+                                onChange={(e) => setPlanGroupForm({ ...planGroupForm, query: e.target.value })}
+                              />
+                              {planGroupMembers
+                                .filter((m: any) =>
+                                  !planGroupForm.query ||
+                                  m.name.toLowerCase().includes(planGroupForm.query.toLowerCase())
+                                )
+                                .map((m: any) => (
+                                <label key={m.customerId} className="flex items-center gap-2 text-sm text-ivory py-1">
+                                  <input type="checkbox" checked={planGroupForm.selected.includes(m.customerId)}
+                                    onChange={(e) => setPlanGroupForm({
+                                      ...planGroupForm,
+                                      selected: e.target.checked
+                                        ? [...planGroupForm.selected, m.customerId]
+                                        : planGroupForm.selected.filter((id: string) => id !== m.customerId),
+                                    })} />
+                                  <span>
+                                    {m.name}
+                                    {m.level && <span className="text-[11px] text-muted"> · {m.level}</span>}
+                                    {m.duplicateRows > 1 && (
+                                      <span className="text-[11px] text-wine"> · {m.duplicateRows} Zuteilungen im System</span>
+                                    )}
+                                  </span>
+                                </label>
+                              ))}
+                              <button
+                                onClick={() => setPlanGroupForm({
+                                  ...planGroupForm,
+                                  selected: planGroupForm.selected.length === planGroupMembers.length
+                                    ? []
+                                    : planGroupMembers.map((m: any) => m.customerId),
+                                })}
+                                className="text-xs text-gold mt-2">
+                                {planGroupForm.selected.length === planGroupMembers.length ? "Auswahl aufheben" : "Alle auswählen"}
+                              </button>
+                            </div>
+                          )}
+
+                          <div className="grid md:grid-cols-2 gap-4">
+                            <Field label="Zielkurs (bestehend)">
+                              <select className={inputClass + " w-full"} value={planGroupForm.toCourseId}
+                                onChange={(e) => setPlanGroupForm({ ...planGroupForm, toCourseId: e.target.value, toChangeId: "" })}>
+                                <option value="">— auswählen —</option>
+                                {courses.filter((c: any) => c.id !== s.courseId && !c.ended_on).map((c: any) => (
+                                  <option key={c.id} value={c.id}>{courseLabel(c)}</option>
+                                ))}
+                              </select>
+                            </Field>
+                            <Field label="oder Zielkurs aus diesem Plan">
+                              <select className={inputClass + " w-full"} value={planGroupForm.toChangeId}
+                                onChange={(e) => setPlanGroupForm({ ...planGroupForm, toChangeId: e.target.value, toCourseId: "" })}>
+                                <option value="">— auswählen —</option>
+                                {(planData.changes ?? []).filter((c: any) => c.kind === "course_create" && !c.stale).map((c: any) => (
+                                  <option key={c.id} value={c.id}>{c.description}</option>
+                                ))}
+                              </select>
+                            </Field>
+                          </div>
+
+                          <Field label="Stichtag">
+                            <input type="date" className={inputClass} value={planGroupForm.effectiveFrom}
+                              onChange={(e) => setPlanGroupForm({ ...planGroupForm, effectiveFrom: e.target.value })} />
+                          </Field>
+
+                          <div className="flex gap-2">
+                            <button disabled={saving || planGroupForm.selected.length === 0}
+                              onClick={() => submitGroupMove(s.courseId)}
+                              className="px-5 py-2 rounded-full text-sm bg-gold text-bg font-semibold disabled:opacity-40">
+                              {planGroupForm.selected.length} {planGroupForm.selected.length === 1 ? "Person" : "Personen"} verschieben
+                            </button>
+                            <button onClick={() => setPlanPersonMode("none")} className="px-5 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {isPlanned ? (
+                        <p className="text-sm text-muted">
+                          Dieser Termin gehört zu einem Kurs, den es real noch nicht gibt. Er lässt sich über die
+                          Änderungsliste unten wieder aus dem Plan entfernen.
+                        </p>
+                      ) : planData.plan.status !== "draft" ? (
+                        <p className="text-sm text-muted">Dieser Plan ist kein Entwurf mehr.</p>
+                      ) : planEditMode === "none" ? (
+                        <div className="flex gap-2 flex-wrap">
+                          <button onClick={() => openPlanEdit(s, "update")} className="px-4 py-2 rounded-full text-sm border border-border text-ivory">Kurs ändern ab diesem Termin</button>
+                          <button onClick={() => openPlanEdit(s, "end")} className="px-4 py-2 rounded-full text-sm border border-wine text-wine">Kurs beenden ab diesem Termin</button>
+                        </div>
+                      ) : planEditMode === "end" ? (
+                        <div className="space-y-3">
+                          <p className="text-sm text-muted">
+                            Beim Veröffentlichen endet die Reihe zum Stichtag. Termine davor bleiben unverändert
+                            stehen, Termine ab dem Stichtag fallen samt ihrer Buchungen weg. Wer betroffen ist,
+                            zeigt dir die Vorabprüfung vor dem Veröffentlichen.
+                          </p>
+                          <Field label="Stichtag">
+                            <input type="date" className={inputClass} value={planEditForm.effectiveFrom}
+                              onChange={(e) => setPlanEditForm({ ...planEditForm, effectiveFrom: e.target.value })} />
+                          </Field>
+                          <div className="flex gap-2">
+                            <button disabled={saving}
+                              onClick={async () => {
+                                const ok = await addPlanChange({ kind: "course_end", courseId: s.courseId, effectiveFrom: planEditForm.effectiveFrom });
+                                if (ok) { setPlanEditMode("none"); setPlanSelectedSessionId(null); }
+                              }}
+                              className="px-5 py-2 rounded-full text-sm bg-wine text-ivory disabled:opacity-50">In den Plan aufnehmen</button>
+                            <button onClick={() => setPlanEditMode("none")} className="px-5 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <p className="text-xs text-muted">
+                            Geändert wird ab dem Stichtag. Alles davor bleibt so dokumentiert, wie es war —
+                            beim Veröffentlichen entsteht daraus ein Split, genau wie bei einer echten Kursänderung.
+                          </p>
+                          <div className="grid md:grid-cols-3 gap-4">
+                            <Field label="Stichtag">
+                              <input type="date" className={inputClass + " w-full"} value={planEditForm.effectiveFrom}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, effectiveFrom: e.target.value })} />
+                            </Field>
+                            <Field label="Bezeichnung">
+                              <input className={inputClass + " w-full"} value={planEditForm.name} list="plan-course-types"
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, name: e.target.value })} />
+                            </Field>
+                            <Field label="Level">
+                              <input className={inputClass + " w-full"} value={planEditForm.level}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, level: e.target.value })} />
+                            </Field>
+                            <Field label="Raum">
+                              <select className={inputClass + " w-full"} value={planEditForm.room}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, room: e.target.value })}>
+                                {ROOMS.map((r) => <option key={r} value={r}>{r}</option>)}
+                              </select>
+                            </Field>
+                            <Field label="Uhrzeit">
+                              <input type="time" className={inputClass + " w-full"} value={planEditForm.startTime}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, startTime: e.target.value })} />
+                            </Field>
+                            <Field label="Dauer (Minuten)">
+                              <input type="number" className={inputClass + " w-full"} value={planEditForm.durationMinutes}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, durationMinutes: Number(e.target.value) })} />
+                            </Field>
+                            <Field label="Kapazität">
+                              <input type="number" className={inputClass + " w-full"} value={planEditForm.capacity}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, capacity: Number(e.target.value) })} />
+                            </Field>
+                            <Field label="Trainer:in (Konto)">
+                              <select className={inputClass + " w-full"} value={planEditForm.trainerId}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, trainerId: e.target.value })}>
+                                <option value="">— unverändert —</option>
+                                {trainers.filter((t: any) => t.active).map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                              </select>
+                            </Field>
+                            <Field label="Enddatum der Reihe (optional)">
+                              <input type="date" className={inputClass + " w-full"} value={planEditForm.endDate}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, endDate: e.target.value })} />
+                            </Field>
+                          </div>
+
+                          <div className="rounded-xl border border-border p-3">
+                            <label className="flex items-center gap-2 text-sm text-muted">
+                              <input type="checkbox" checked={planEditForm.weekdayChanged}
+                                onChange={(e) => setPlanEditForm({ ...planEditForm, weekdayChanged: e.target.checked })} />
+                              Auf einen anderen Wochentag verschieben
+                            </label>
+                            {planEditForm.weekdayChanged && (
+                              <div className="mt-3">
+                                <Field label="Neuer Wochentag">
+                                  <select className={inputClass} value={planEditForm.weekday}
+                                    onChange={(e) => setPlanEditForm({ ...planEditForm, weekday: Number(e.target.value) })}>
+                                    {WEEKDAYS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                                  </select>
+                                </Field>
+                                <p className="text-[11px] text-muted mt-2">
+                                  Die Termine ab dem Stichtag liegen dann an neuen Daten. Der Plan rechnet das
+                                  sofort mit; bestehende Buchungen dieser Termine zeigt dir die Vorabprüfung.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex gap-2">
+                            <button disabled={saving}
+                              onClick={async () => {
+                                const payload = planUpdatePayload(s, planEditForm);
+                                if (Object.keys(payload).length === 0) { setActionError("Es wurde nichts geändert."); return; }
+                                const ok = await addPlanChange({ kind: "course_update", courseId: s.courseId, effectiveFrom: planEditForm.effectiveFrom, payload });
+                                if (ok) { setPlanEditMode("none"); setPlanSelectedSessionId(null); }
+                              }}
+                              className="px-5 py-2 rounded-full text-sm bg-gold text-bg font-semibold disabled:opacity-50">
+                              {saving ? "Wird gespeichert …" : "In den Plan aufnehmen"}
+                            </button>
+                            <button onClick={() => setPlanEditMode("none")} className="px-5 py-2 rounded-full text-sm border border-border text-muted">Abbrechen</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div className="rounded-2xl p-5 bg-surface border border-border">
+                  <h4 className="text-sm text-ivory mb-3">Geplante Änderungen</h4>
+                  {liveChanges.length === 0 && staleChanges.length === 0 ? (
+                    <p className="text-sm text-muted">
+                      Noch keine Änderungen in diesem Plan. Kurse anlegen und ändern kommt mit dem nächsten
+                      Baustein (J2), die Teilnehmerplanung mit J3.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {liveChanges.map((c: any) => (
+                        <li key={c.id} className="text-sm text-ivory flex items-start justify-between gap-3">
+                          <span className="flex items-start gap-2">
+                            <span className="text-gold">•</span>
+                            <span>{c.description}{c.note && <span className="text-muted"> — {c.note}</span>}</span>
+                          </span>
+                          {planData.plan.status === "draft" && (
+                            <button
+                              onClick={() => askConfirm(
+                                "Änderung aus dem Plan entfernen?",
+                                `„${c.description}" wird aus diesem Plan gelöscht. Am echten Kalender ändert sich dadurch nichts, weil der Plan ihn nie berührt hat.`,
+                                "Entfernen",
+                                () => (c.groupKey ? removePlanGroup(c.groupKey) : removePlanChange(c.id))
+                              )}
+                              className="text-xs text-muted hover:text-wine whitespace-nowrap">entfernen</button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {staleChanges.length > 0 && (
+                    <div className="mt-5 pt-4 border-t border-border">
+                      <p className="text-sm text-wine flex items-center gap-2 mb-2">
+                        <AlertTriangle size={14} /> Gegenstandslos geworden — die echte Welt hat sich geändert
+                      </p>
+                      <ul className="space-y-2">
+                        {staleChanges.map((c: any) => (
+                          <li key={c.id} className="text-sm text-muted flex items-start justify-between gap-3">
+                            <span>
+                              <span className="line-through">{c.description}</span>
+                              <span className="block text-xs text-wine">{c.staleReason}</span>
+                            </span>
+                            {planData.plan.status === "draft" && (
+                              <button onClick={() => removePlanChange(c.id)} className="text-xs text-muted hover:text-wine whitespace-nowrap">entfernen</button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-xs text-muted mt-3">
+                        Diese Änderungen werden beim Veröffentlichen übersprungen. Du kannst sie im Plan stehen
+                        lassen; sie richten keinen Schaden an.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
